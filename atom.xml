@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Demo</title>
+  
+  
+  <link href="https://example.com/atom.xml" rel="self"/>
+  
+  <link href="https://example.com/"/>
+  <updated>2026-10-02T02:00:00.000Z</updated>
+  <id>https://example.com/</id>
+  
+  <author>
+    <name>Demo</name>
+    
+  </author>
+  
+  <generator uri="https://hexo.io/">Hexo</generator>
+  
+  <entry>
+    <title>外挂标签速查</title>
+    <link href="https://example.com/posts/56032921.html"/>
+    <id>https://example.com/posts/56032921.html</id>
+    <published>2026-10-02T02:00:00.000Z</published>
+    <updated>2026-10-02T02:00:00.000Z</updated>
+    
+    <content type="html"><![CDATA[<p>这一页把主题自带的外挂标签集中演示一遍，写文章时直接抄。</p><h2 id="1-提示块-note">1. 提示块 note</h2><figure class="highlight markdown"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">&#123;% note info flat %&#125;说明文字&#123;% endnote %&#125;</span><br></pre></td></tr></table></figure><div class="note info flat"><p>info：普通提示</p></div><div class="note primary modern"><p>primary：主要提示</p></div><div class="note warning flat"><p>warning：警告提示</p></div><h2 id="2-标签页-tabs">2. 标签页 tabs</h2><figure class="highlight markdown"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br></pre></td><td class="code"><pre><span class="line">&#123;% tabs 分组名 %&#125;</span><br><span class="line">&lt;!-- tab 第一个标签 --&gt;</span><br><span class="line">内容一</span><br><span class="line">&lt;!-- endtab --&gt;</span><br><span class="line">&lt;!-- tab 第二个标签 --&gt;</span><br><span class="line">内容二</span><br><span class="line">&lt;!-- endtab --&gt;</span><br><span class="line">&#123;% endtabs %&#125;</span><br></pre></td></tr></table></figure><div class="tabs" id="演示"><ul class="nav-tabs"><li class="tab active"><button type="button" data-href="#演示-1">用 YAML 写</button></li><li class="tab"><button type="button" data-href="#演示-2">用 JSON 写</button></li></ul><div class="tab-contents"><div class="tab-item-content active" id="演示-1"><figure class="highlight yaml"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line"><span class="attr">title:</span> <span class="string">示例</span></span><br><span class="line"><span class="attr">tags:</span> [<span class="string">Hexo</span>]</span><br></pre></td></tr></table></figure><button type="button" class="tab-to-top" aria-label="scroll to top"><i class="fas fa-arrow-up"></i></button></div><div class="tab-item-content" id="演示-2"><figure class="highlight json"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line"><span class="punctuation">&#123;</span> <span class="attr">&quot;title&quot;</span><span class="punctuation">:</span> <span class="string">&quot;示例&quot;</span><span class="punctuation">,</span> <span class="attr">&quot;tags&quot;</span><span class="punctuation">:</span> <span class="punctuation">[</span><span class="string">&quot;Hexo&quot;</span><span class="punctuation">]</span> <span class="punctuation">&#125;</span></span><br></pre></td></tr></table></figure><button type="button" class="tab-to-top" aria-label="scroll to top"><i class="fas fa-arrow-up"></i></button></div></div></div><h2 id="3-折叠-hideToggle">3. 折叠 hideToggle</h2><figure class="highlight markdown"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">&#123;% hideToggle 点开看更多 %&#125;</span><br><span class="line">被折叠的内容</span><br><span class="line">&#123;% endhideToggle %&#125;</span><br></pre></td></tr></table></figure><details class="toggle" ><summary class="toggle-button" style="">点开看更多</summary><div class="toggle-content"><p>被折叠的内容，适合放答案、长代码或剧透。</p></div></details><h2 id="4-按钮、标签、居中标题">4. 按钮、标签、居中标题</h2><figure class="highlight markdown"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">&#123;% btn https://hexo.io/zh-cn/, Hexo 文档, hexo %&#125;</span><br><span class="line">&#123;% label 绿色标签 green %&#125;</span><br><span class="line"><span class="language-xml"><span class="tag">&lt;<span class="name">h2</span> <span class="attr">style</span>=<span class="string">&quot;text-align:center&quot;</span>&gt;</span></span>居中的大标题<span class="language-xml"><span class="tag">&lt;/<span class="name">h2</span>&gt;</span></span></span><br></pre></td></tr></table></figure><a class="btn-beautify " href="https://hexo.io/zh-cn/"   title="Hexo 文档"><i class="hexo"></i><span>Hexo 文档</span></a> <mark class="hl-label green">绿色标签</mark> <span class='p center logo h2'>居中的大标题</span><h2 id="5-时间线与画廊">5. 时间线与画廊</h2><figure class="highlight markdown"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">&#123;% timeline 标题 %&#125;</span><br><span class="line">&lt;!-- timeline 2026-10-01 --&gt;</span><br><span class="line">条目一</span><br><span class="line">&lt;!-- endtimeline --&gt;</span><br><span class="line">&#123;% endtimeline %&#125;</span><br><span class="line"></span><br><span class="line">&#123;% galleryGroup &#x27;分组名&#x27; &#x27;描述&#x27; &#x27;/链接&#x27; 封面图 %&#125;</span><br></pre></td></tr></table></figure><div class="timeline undefined"><div class='timeline-item headline'><div class='timeline-item-title'><div class='item-circle'><p>演示</p></div></div></div><div class='timeline-item'><div class='timeline-item-title'><div class='item-circle'><p>2026-10-01</p></div></div><div class='timeline-item-content'><p>这一条演示时间线</p></div></div><div class='timeline-item'><div class='timeline-item-title'><div class='item-circle'><p>2026-10-02</p></div></div><div class='timeline-item-content'><p>时间线支持多段，用来写站史很好用</p></div></div></div><h2 id="6-图表-mermaid">6. 图表 mermaid</h2><div class="mermaid-wrap"><pre class="mermaid-src" hidden>  graph LR  A[写 Markdown] --&gt; B[hexo generate]  B --&gt; C[gulp 压缩]  C --&gt; D[推到托管平台]  </pre></div><div class="note primary flat"><p>以上标签的实现都在 <code>themes/fomalhaut/scripts/tag/</code>，想加自己的标签照着改一个文件即可。</p></div>]]></content>
+    
+    
+    <summary type="html">Fomalhaut 主题自带的外挂标签用法速查，复制粘贴即可用。</summary>
+    
+    
+    
+    <category term="开始使用" scheme="https://example.com/categories/%E5%BC%80%E5%A7%8B%E4%BD%BF%E7%94%A8/"/>
+    
+    
+    <category term="Hexo" scheme="https://example.com/tags/Hexo/"/>
+    
+    <category term="Fomalhaut" scheme="https://example.com/tags/Fomalhaut/"/>
+    
+    <category term="标签" scheme="https://example.com/tags/%E6%A0%87%E7%AD%BE/"/>
+    
+  </entry>
+  
+</feed>
