@@ -1,0 +1,50 @@
+/* 预览页只做最小适配：正文排版全部来自站点自己的 /css/index.css */
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+}
+
+body {
+  min-height: 100%;
+}
+
+#content-inner {
+  padding: 0 !important;
+  margin: 0 !important;
+  max-width: none !important;
+}
+
+#post {
+  width: 100% !important;
+  max-width: none !important;
+  margin: 0 !important;
+}
+
+#article-container {
+  padding: 4px 2px 40px !important;
+}
+
+#article-container > :first-child {
+  margin-top: 0 !important;
+}
+
+.preview-empty {
+  color: #8b8378;
+  font: 14px/1.8 "Microsoft YaHei UI", sans-serif;
+  padding: 8px 2px;
+}
+
+.preview-fallback {
+  white-space: pre-wrap;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(128, 120, 108, .35);
+  border-radius: 4px;
+}
