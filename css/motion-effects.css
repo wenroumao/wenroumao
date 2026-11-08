@@ -1,0 +1,230 @@
+/* ============================================================================
+ * source/css/motion-effects.css —— 首页 ReactBits 风格动效样式
+ * ----------------------------------------------------------------------------
+ * 只在首页注入（scripts/motion-inject.js 判断），由 source/js/inject/motion-effects.js
+ * 按需给元素加类后才会生效：
+ *   .fm-split / .fm-gradient     站点标题「逐字进场」「流光渐变」
+ *   .fm-spotlight-host           首页文章卡片「鼠标聚光」
+ *   .fm-grid-layer               首屏头图「网格 + 鼠标柔光」
+ *
+ * 关键约束：
+ *   ① 所有动画都写在「JS 加了类之后」才命中的选择器里 —— JS 未加载 / 报错 /
+ *      浏览器禁用 JS 时，标题与卡片保持原样，绝不会出现「等动画才显示」的空白。
+ *   ② 只改 transform / opacity / filter / background-position，不碰布局属性。
+ *   ③ 减少动态偏好（prefers-reduced-motion: reduce）下全部动画停止，只保留静态网格。
+ *   ④ 配色从 --theme-color 派生，浅色 / 深色模式跟随主题现有暗色切换。
+ * ========================================================================== */
+
+/* ------------------------------ 1. 标题逐字进场 ------------------------------ */
+#site-title.fm-split .fm-char {
+  display: inline-block;
+  white-space: pre;
+  animation: fm-char-in .64s cubic-bezier(.2, .75, .3, 1) both;
+  animation-delay: calc(var(--fm-i, 0) * 32ms);
+}
+
+@keyframes fm-char-in {
+  from {
+    opacity: 0;
+    transform: translate3d(0, .34em, 0) scale(.96);
+    filter: blur(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+    filter: blur(0);
+  }
+}
+
+/* ------------------------------ 2. 标题流光渐变 ------------------------------ */
+/* 两种形态：
+   · 未拆字 → 渐变直接做在 #site-title 上（.fm-gradient）；
+   · 同时开启逐字进场 → 渐变必须做在每一颗 .fm-char 上（.fm-gradient-chars）。
+     原因是字符 span 带 transform / filter 会形成独立合成层，父元素的
+     background-clip:text 在 Chrome 里裁剪不到子层，颜色会只剩 text-shadow 的光晕。
+     逐字模式下每颗字再按索引给一个负延迟，形成从左到右扫过的光带。 */
+#site-title.fm-gradient {
+  --fm-grad-hi: #b9fff4;
+  --fm-grad-hi: color-mix(in srgb, var(--theme-color, #39c5bb) 34%, #fff);
+  color: transparent;
+  background-image: linear-gradient(
+    100deg,
+    #fff 0%,
+    var(--fm-grad-hi) 24%,
+    #fff 48%,
+    var(--fm-grad-hi) 72%,
+    #fff 100%
+  );
+  background-repeat: repeat;
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  /* 平移动画由 JS 用 Web Animations 驱动 background-position，
+     不占用 CSS animation 属性，主题原有的霓虹 light_15px 动画不受影响 */
+}
+
+#site-title.fm-gradient-chars .fm-char {
+  --fm-grad-hi: #b9fff4;
+  --fm-grad-hi: color-mix(in srgb, var(--theme-color, #39c5bb) 34%, #fff);
+  color: transparent;
+  background-image: linear-gradient(
+    100deg,
+    #fff 0%,
+    var(--fm-grad-hi) 24%,
+    #fff 48%,
+    var(--fm-grad-hi) 72%,
+    #fff 100%
+  );
+  background-repeat: repeat;
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* 深色模式把高光提亮一点，避免压在深色遮罩上发灰 */
+[data-theme="dark"] #site-title.fm-gradient,
+[data-theme="dark"] #site-title.fm-gradient-chars .fm-char {
+  --fm-grad-hi: #d9fffa;
+  --fm-grad-hi: color-mix(in srgb, var(--theme-color, #39c5bb) 45%, #fff);
+}
+
+/* ------------------------------ 3. 卡片鼠标聚光 ------------------------------ */
+#recent-posts.fm-spotlight-host > .recent-post-item {
+  position: relative;
+}
+
+#recent-posts.fm-spotlight-host > .recent-post-item::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  background: radial-gradient(
+    260px circle at var(--fm-x, 50%) var(--fm-y, 50%),
+    var(--fm-spot, rgba(255, 255, 255, .18)) 0%,
+    transparent 64%
+  );
+  transition: opacity .28s ease;
+}
+
+#recent-posts.fm-spotlight-host > .recent-post-item {
+  --fm-spot: rgba(57, 197, 187, .22);
+  --fm-spot: color-mix(in srgb, var(--theme-color, #39c5bb) 24%, transparent);
+}
+
+[data-theme="dark"] #recent-posts.fm-spotlight-host > .recent-post-item {
+  --fm-spot: rgba(255, 255, 255, .14);
+  --fm-spot: color-mix(in srgb, var(--theme-color, #39c5bb) 38%, transparent);
+}
+
+#recent-posts.fm-spotlight-host > .recent-post-item.fm-spot-active::after {
+  opacity: 1;
+}
+
+/* --------------------------- 4. 首屏网格 + 鼠标柔光 --------------------------- */
+#page-header.full_page .fm-grid-layer {
+  --fm-grid-size: 54px;
+  --fm-grid-line: rgba(255, 255, 255, .07);
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  background-image:
+    linear-gradient(to right, var(--fm-grid-line) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--fm-grid-line) 1px, transparent 1px);
+  background-size: var(--fm-grid-size) var(--fm-grid-size);
+  /* 让网格四周淡出，只在头图中央区域可见 */
+  -webkit-mask-image: radial-gradient(ellipse 72% 82% at 50% 46%, #000 30%, transparent 100%);
+  mask-image: radial-gradient(ellipse 72% 82% at 50% 46%, #000 30%, transparent 100%);
+  opacity: .8;
+}
+
+[data-theme="dark"] #page-header.full_page .fm-grid-layer {
+  --fm-grid-line: rgba(255, 255, 255, .1);
+  opacity: .9;
+}
+
+#page-header.full_page .fm-grid-glow {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 420px;
+  height: 420px;
+  margin: -210px 0 0 -210px;
+  border-radius: 50%;
+  pointer-events: none;
+  opacity: 0;
+  background: radial-gradient(
+    circle,
+    rgba(57, 197, 187, .34) 0%,
+    transparent 66%
+  );
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--theme-color, #39c5bb) 34%, transparent) 0%,
+    transparent 66%
+  );
+  transform: translate3d(-999px, -999px, 0);
+  transition: opacity .35s ease;
+  will-change: transform, opacity;
+}
+
+#page-header.full_page .fm-grid-layer.fm-grid-live .fm-grid-glow {
+  opacity: 1;
+}
+
+[data-theme="dark"] #page-header.full_page .fm-grid-glow {
+  background: radial-gradient(
+    circle,
+    rgba(255, 255, 255, .16) 0%,
+    transparent 66%
+  );
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--theme-color, #39c5bb) 46%, transparent) 0%,
+    transparent 66%
+  );
+}
+
+/* ------------------------------ 暂停 / 降级 ------------------------------ */
+/* 页面不可见时（JS 会给 <html> 加 fm-motion-paused）暂停逐字 CSS 动画；
+   流光是 Web Animations，由 JS 自己 pause / play */
+.fm-motion-paused #site-title.fm-split .fm-char {
+  animation-play-state: paused !important;
+}
+
+/* 触屏 / 窄屏：不做鼠标柔光与聚光（JS 也不会加对应类，这里做兜底） */
+@media (hover: none), (pointer: coarse) {
+  #page-header.full_page .fm-grid-glow,
+  #recent-posts.fm-spotlight-host > .recent-post-item::after {
+    display: none;
+  }
+}
+
+@media (max-width: 768px) {
+  #page-header.full_page .fm-grid-layer {
+    --fm-grid-size: 40px;
+    opacity: .55;
+  }
+}
+
+/* 减少动态偏好：所有动画停止，标题保持完整可见；网格退化为静态纹理 */
+@media (prefers-reduced-motion: reduce) {
+  #site-title.fm-split .fm-char {
+    animation: none !important;
+  }
+
+  #page-header.full_page .fm-grid-layer {
+    opacity: .45;
+  }
+
+  #page-header.full_page .fm-grid-glow,
+  #recent-posts.fm-spotlight-host > .recent-post-item::after {
+    display: none !important;
+  }
+}

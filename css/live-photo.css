@@ -1,0 +1,290 @@
+@charset "UTF-8";
+/*!
+ * 实况照片 · Live Photo（live-photo.css）
+ * ============================================================================
+ * 作用页：/box/gallery/live/（source/box/gallery/live/index.md）。
+ *
+ * 移植来源：wenroumao.cn 的 /js/live_photo.js + /css/index.css 里的 live-photo 规则，
+ * 按本站需要做了裁剪：
+ *   · 容器样式、静图/视频叠层、LIVE 角标、进度条、播放态、移动端与减少动态降级保留；
+ *   · 去掉 3D 倾斜、光扫、发光脉冲等重动效，避免和主题卡片视觉打架，也省性能；
+ *   · 不做 canvas 抽帧，封面统一用 <video poster>（跨域视频会污染 canvas）。
+ *
+ * 与主题的关系：
+ *   · 容器不使用 .fj-gallery，主题的 runJustifiedGallery 不会碰它；
+ *   · 静图带 no-lightbox，fancybox 不会把点击抢走；
+ *   · 容器内 .img-alt 直接隐藏，兜住主题的 addPhotoFigcaption。
+ *
+ * 卸载：删掉 _config.fomalhaut.yml inject.head 里引入本文件的 <link> 即可。
+ */
+
+/* ---------------------------------------------------------------- 布局网格 */
+.live-photo-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 16px;
+  margin: 16px 0 8px;
+}
+
+.live-photo-card {
+  margin: 0;
+}
+
+/* ---------------------------------------------------------------- 容器本体 */
+.live-photo-container {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  max-height: 78vh;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #111;
+  cursor: pointer;
+  contain: layout paint;
+  transform: translateZ(0);
+  transition: transform .3s ease, box-shadow .3s ease;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+  user-select: none;
+}
+
+.live-photo-container:focus-visible {
+  outline: 2px solid var(--theme-color, #39c5bb);
+  outline-offset: 2px;
+}
+
+/* 不支持 aspect-ratio 的旧浏览器：退回固定比例占位高度（由脚本按视频宽高比覆盖） */
+.live-photo-container.aspect-ratio-fallback {
+  height: 0;
+  padding-top: 133%;
+}
+
+/* ---------------------------------------------------------------- 叠层媒体 */
+.live-photo-wrapper {
+  position: absolute;
+  inset: 0;
+}
+
+.live-photo-still,
+.live-photo-video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  border-radius: inherit;
+  object-fit: cover;
+}
+
+.live-photo-still {
+  z-index: 1;
+  transition: opacity .35s ease, filter .35s ease, transform .35s ease;
+}
+
+.live-photo-video {
+  z-index: 2;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .35s ease;
+}
+
+.live-photo-container.playing .live-photo-video {
+  opacity: 1;
+}
+
+.live-photo-container.playing .live-photo-still {
+  opacity: 0;
+}
+
+/* ---------------------------------------------------------------- 角标与提示 */
+.live-photo-indicator {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 4;
+  padding: 2px 6px;
+  border: 1px solid rgba(255, 255, 255, .2);
+  border-radius: 3px;
+  background: rgba(0, 0, 0, .8);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: .5px;
+  line-height: 1.6;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .3);
+  pointer-events: none;
+}
+
+.live-photo-indicator::before {
+  content: '●';
+  margin-right: 3px;
+  color: #ff3b30;
+  font-size: 8px;
+}
+
+.live-photo-container.playing .live-photo-indicator {
+  background: rgba(255, 59, 48, .9);
+  border-color: rgba(255, 255, 255, .4);
+}
+
+/* 外部站点的播放按钮在部署样式里是隐藏的，这里保持一致，悬停/长按即可播放 */
+.live-photo-play-btn {
+  display: none;
+}
+
+/* 视频不可用时的兜底文案（例如 Chrome 无法解 iPhone 的 HEVC MOV） */
+.live-photo-tip {
+  position: absolute;
+  left: 50%;
+  bottom: 12px;
+  z-index: 4;
+  display: none;
+  padding: 4px 10px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, .6);
+  color: #fff;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: nowrap;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.live-photo-container.error .live-photo-tip {
+  display: block;
+}
+
+/* ---------------------------------------------------------------- 进度条 */
+.live-photo-progress {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  z-index: 5;
+  width: 0;
+  height: 3px;
+  background: var(--theme-color, #39c5bb);
+  transition: width .1s linear;
+}
+
+.live-photo-container[data-show-progress="false"] .live-photo-progress {
+  display: none;
+}
+
+/* ---------------------------------------------------------------- 加载态 */
+.live-photo-container.loading::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 3;
+  width: 28px;
+  height: 28px;
+  margin: -14px 0 0 -14px;
+  border: 3px solid rgba(255, 255, 255, .3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: lp-spin 1s linear infinite;
+  pointer-events: none;
+}
+
+@keyframes lp-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ---------------------------------------------------------------- 悬停/播放态 */
+@media (hover: hover) and (pointer: fine) {
+  .live-photo-container:hover {
+    transform: scale(1.015);
+    box-shadow: 0 8px 25px rgba(0, 0, 0, .16);
+  }
+
+  .live-photo-container:hover .live-photo-still {
+    filter: blur(2px) brightness(1.05);
+  }
+}
+
+.live-photo-container.playing {
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, .12), 0 10px 30px rgba(0, 0, 0, .2);
+}
+
+[data-live-photo-mode="press"] .live-photo-container:active {
+  transform: scale(.985);
+  transition: transform .1s ease;
+}
+
+/* ---------------------------------------------------------------- 元信息 */
+.live-photo-meta {
+  margin: 8px 2px 0;
+  font-size: .88em;
+  line-height: 1.6;
+  color: var(--font-color, #666);
+  opacity: .85;
+}
+
+.live-photo-title {
+  margin: 0;
+  font-weight: 600;
+}
+
+.live-photo-desc {
+  margin: 2px 0 0;
+}
+
+/* 兜住主题 addPhotoFigcaption 插入的图注 */
+.live-photo-container .img-alt {
+  display: none;
+}
+
+/* ---------------------------------------------------------------- 深浅色 */
+[data-theme="dark"] .live-photo-container {
+  background: #000;
+}
+
+[data-theme="dark"] .live-photo-tip {
+  background: rgba(0, 0, 0, .75);
+}
+
+/* ---------------------------------------------------------------- 移动端 */
+@media screen and (max-width: 640px) {
+  .live-photo-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .live-photo-container {
+    border-radius: 10px;
+    max-height: 70vh;
+  }
+
+  .live-photo-indicator {
+    top: 6px;
+    left: 6px;
+    padding: 2px 5px;
+    font-size: 8px;
+  }
+}
+
+/* ---------------------------------------------------------------- 减少动态 */
+@media (prefers-reduced-motion: reduce) {
+  .live-photo-container,
+  .live-photo-still,
+  .live-photo-video {
+    transition: none;
+  }
+
+  .live-photo-container:hover,
+  [data-live-photo-mode="press"] .live-photo-container:active {
+    transform: none;
+    box-shadow: none;
+  }
+
+  .live-photo-container:hover .live-photo-still {
+    filter: none;
+  }
+
+  .live-photo-container.loading::after {
+    animation-duration: 2s;
+  }
+}
