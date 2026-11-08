@@ -1138,6 +1138,50 @@ function createAdminServer(options) {
       });
     }
 
+    // GET：流式下载包文件。只接受 backup/package/ 下本功能生成的 zip 名（不接受路径参数）。
+    if (apiPath === '/package/download' && method === 'GET') {
+      let file;
+      try {
+        file = packager.resolvePackageFile(baseDir, parsed.searchParams.get('name'));
+      } catch (err) {
+        const code = err && err.code;
+        return fail(res, code === 'PACKAGE_NOT_FOUND' ? 404 : 400, err.message);
+      }
+      const asciiName = file.name.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
+      securityHeaders(res);
+      res.statusCode = 200;
+      res.setHeader('Content-Type', 'application/zip');
+      res.setHeader('Content-Length', String(file.size));
+      res.setHeader('Content-Disposition', 'attachment; filename="' + asciiName +
+        '"; filename*=UTF-8\'\'' + encodeURIComponent(file.name));
+      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('X-Package-Size', String(file.size));
+      const stream = fs.createReadStream(file.absPath);
+      stream.on('error', function () { res.destroy(); });
+      res.on('close', function () { stream.destroy(); });
+      stream.pipe(res);
+      return;
+    }
+
+    // POST：在系统文件管理器里定位到该包。包名与路径校验都在 package.js，接口不接受任意路径。
+    if (apiPath === '/package/reveal' && method === 'POST') {
+      return readBody(req, 4 * 1024).then(function (body) {
+        return packager.revealFile(baseDir, body && body.name, {
+          spawn: packageOptions.revealSpawn,
+          platform: packageOptions.platform
+        });
+      }).then(function (result) {
+        sendJson(res, 200, { ok: true, path: result.path, name: result.name });
+      }).catch(function (err) {
+        const code = (err && err.code) || 'PACKAGE_REVEAL_FAILED';
+        const status = code === 'PACKAGE_NOT_FOUND' ? 404 : code === 'PACKAGE_INVALID_NAME' ? 400 : 500;
+        sendJson(res, status, {
+          ok: false,
+          error: { code: code, message: (err && err.message) || '打开文件夹失败。' }
+        });
+      });
+    }
+
     /* --------------------------------------------------------- SSH 快捷面板 */
     // GET 只读：只报告私钥/公钥是否存在、公钥全文与指纹，绝不读私钥。
     if (apiPath === '/ssh' && isRead) {

@@ -22,6 +22,7 @@ const source = require('../admin/source.js');
 const importer = require('../admin/importer.js');
 const exporter = require('../admin/exporter.js');
 const crypto = require('crypto');
+const { EventEmitter } = require('events');
 
 const CONFIG_SITE = [
   'title: Demo',
@@ -1372,9 +1373,131 @@ test('打包：轻量包排除凭据/依赖/产物/SSH，包含迁移说明与�
 
     const after = await call(srv.base, '/admin/api/package', { cookie: auth.cookie });
     assert.equal(after.json.last && after.json.last.name, res.json.name);
+    assert.equal(after.json.last.absPath, zipFile);
+    assert.equal(after.json.last.exists, true);
+    assert.equal(after.json.outputDirAbs, path.join(fx.project, 'backup', 'package'));
   } finally {
     await srv.close();
     cleanup(fx.root);
+  }
+});
+
+test('打包：下载接口流式返回完整 zip，拒绝非包名与缺失文件', async function () {
+  const fx = makePackageFixture();
+  const srv = await startServer(fx.project, null, {
+    packageOptions: { home: fx.home, compressor: 'node' }
+  });
+  try {
+    const auth = await login(srv.base);
+    const created = await call(srv.base, '/admin/api/package', {
+      method: 'POST', cookie: auth.cookie, csrf: auth.csrf, body: { mode: 'light' }
+    });
+    assert.equal(created.status, 200);
+    const zipFile = path.join(fx.project, created.json.file.replace(/\//g, path.sep));
+
+    const res = await fetch(srv.base + '/admin/api/package/download?name=' +
+      encodeURIComponent(created.json.name), { headers: { Cookie: auth.cookie } });
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get('content-type'), 'application/zip');
+    assert.equal(Number(res.headers.get('content-length')), fs.statSync(zipFile).size);
+    assert.match(res.headers.get('content-disposition'), /attachment; filename=/);
+    assert.match(res.headers.get('content-disposition'), /filename\*=UTF-8''/);
+    const body = Buffer.from(await res.arrayBuffer());
+    assert.equal(body.length, fs.statSync(zipFile).size);
+    assert.equal(body.slice(0, 2).toString(), 'PK');
+
+    const noAuth = await fetch(srv.base + '/admin/api/package/download?name=' +
+      encodeURIComponent(created.json.name));
+    assert.equal(noAuth.status, 401);
+
+    const old = await call(srv.base, '/admin/api/package/download?name=old.zip', { cookie: auth.cookie });
+    assert.equal(old.status, 400);
+    const escape = await call(srv.base, '/admin/api/package/download?name=' +
+      encodeURIComponent('../.admin-auth'), { cookie: auth.cookie });
+    assert.equal(escape.status, 400);
+    const missing = await call(srv.base, '/admin/api/package/download?name=wenroumao-blog-20260101-0000.zip',
+      { cookie: auth.cookie });
+    assert.equal(missing.status, 404);
+  } finally {
+    await srv.close();
+    cleanup(fx.root);
+  }
+});
+
+test('打包：打开所在文件夹只接受本次包名，Windows 命令带引号且不走 shell', async function () {
+  const fx = makePackageFixture();
+  const spawnCalls = [];
+  const srv = await startServer(fx.project, null, {
+    packageOptions: {
+      home: fx.home, compressor: 'node', platform: 'win32',
+      revealSpawn: function (command, args, options) {
+        spawnCalls.push({ command: command, args: args, options: options });
+        const child = new EventEmitter();
+        child.unref = function () {};
+        setImmediate(function () { child.emit('spawn'); });
+        return child;
+      }
+    }
+  });
+  try {
+    const auth = await login(srv.base);
+    const created = await call(srv.base, '/admin/api/package', {
+      method: 'POST', cookie: auth.cookie, csrf: auth.csrf, body: { mode: 'light' }
+    });
+    assert.equal(created.status, 200);
+    const expected = path.join(fx.project, created.json.file.replace(/\//g, path.sep));
+
+    const res = await call(srv.base, '/admin/api/package/reveal', {
+      method: 'POST', cookie: auth.cookie, csrf: auth.csrf, body: { name: created.json.name }
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.json.ok, true);
+    assert.equal(res.json.path, expected);
+    assert.equal(spawnCalls.length, 1);
+    assert.equal(spawnCalls[0].command, 'explorer.exe');
+    assert.deepEqual(spawnCalls[0].args, ['/select,"' + expected + '"']);
+    assert.equal(spawnCalls[0].options.windowsVerbatimArguments, true);
+
+    const bad = await call(srv.base, '/admin/api/package/reveal', {
+      method: 'POST', cookie: auth.cookie, csrf: auth.csrf, body: { name: '..\\..\\Windows\\system32' }
+    });
+    assert.equal(bad.status, 400);
+    assert.equal(spawnCalls.length, 1, '非法包名不应触发任何命令');
+
+    const noCsrf = await call(srv.base, '/admin/api/package/reveal', {
+      method: 'POST', cookie: auth.cookie, body: { name: created.json.name }
+    });
+    assert.equal(noCsrf.status, 403);
+    assert.equal(spawnCalls.length, 1);
+  } finally {
+    await srv.close();
+    cleanup(fx.root);
+  }
+});
+
+test('打包：路径含空格与中文时，定位命令仍把完整路径作为一个带引号的参数', async function () {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fomalhaut 中文 空格-'));
+  const name = 'wenroumao-blog-20261108-2336.zip';
+  const dir = path.join(root, 'backup', 'package');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, name), 'PK', 'utf8');
+  try {
+    const calls = [];
+    const result = await packager.revealFile(root, name, {
+      platform: 'win32',
+      spawn: function (command, args, options) {
+        calls.push({ command: command, args: args, options: options });
+        const child = new EventEmitter();
+        child.unref = function () {};
+        setImmediate(function () { child.emit('spawn'); });
+        return child;
+      }
+    });
+    assert.equal(result.path, path.join(dir, name));
+    assert.equal(calls[0].args[0], '/select,"' + path.join(dir, name) + '"');
+    assert.equal(calls[0].options.windowsVerbatimArguments, true);
+  } finally {
+    cleanup(root);
   }
 });
 

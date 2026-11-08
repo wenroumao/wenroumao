@@ -1308,7 +1308,8 @@ html[data-theme="dark"] .diff-del { background: rgba(224, 112, 79, .13); }
 .pkg-value { font-family: var(--mono); word-break: break-all; }
 .pkg-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 12px; border-top: 1px solid var(--line); }
 .pkg-actions .btn { margin: 0; }
-.pkg-actions .muted { font-size: 12px; }
+.pkg-actions a.btn { text-decoration: none; }
+.pkg-actions .muted { font-size: 12px; line-height: 1.6; }
 .pkg-last { display: grid; gap: 0; border: 1px solid var(--line); }
 .guide-list { margin: 10px 0 0; padding-left: 22px; display: grid; gap: 8px; font-size: 13px; line-height: 1.7; }
 .guide-list code { background: var(--accent-soft); padding: 1px 5px; border-radius: 2px; }

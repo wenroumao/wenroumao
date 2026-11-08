@@ -23,6 +23,8 @@ const { spawn } = require('child_process');
 
 const OUTPUT_DIR = 'backup/package';
 const LAST_FILE = '.last.json';
+// 只接受本功能生成的包名，避免把任意路径当参数传进来。
+const PACKAGE_NAME = /^wenroumao-blog-\d{8}-\d{4}(-\d+)?\.zip$/;
 
 const MODES = [
   {
@@ -408,11 +410,97 @@ function lastRecord(baseDir) {
   } catch (e) { return null; }
 }
 
+function packageDir(root) {
+  return path.join(path.resolve(root || '.'), 'backup', 'package');
+}
+
+function isPackageName(name) {
+  return PACKAGE_NAME.test(String(name == null ? '' : name));
+}
+
+/**
+ * 把前端传来的包名解析成 backup/package/ 下的真实文件。
+ * 只接受本功能生成的 zip 名，不接受任何路径分隔符，防止任意路径读取或命令注入。
+ */
+function resolvePackageFile(root, name) {
+  const raw = String(name == null ? '' : name).trim();
+  if (!raw || raw !== path.basename(raw) || /[\\/]/.test(raw) || !isPackageName(raw)) {
+    throw packageError('PACKAGE_INVALID_NAME', '包名不合法，只支持 backup/package/ 下本次生成的 zip。');
+  }
+  const dir = packageDir(root);
+  const abs = path.join(dir, raw);
+  if (!isInside(dir, abs)) {
+    throw packageError('PACKAGE_INVALID_NAME', '包名不合法，只支持 backup/package/ 下本次生成的 zip。');
+  }
+  let stat = null;
+  try { stat = fs.statSync(abs); } catch (e) { stat = null; }
+  if (!stat || !stat.isFile()) {
+    throw packageError('PACKAGE_NOT_FOUND', '找不到这个包，可能已经被移动或删除：' + raw);
+  }
+  return { name: raw, absPath: abs, dir: dir, size: stat.size, mtimeMs: stat.mtimeMs };
+}
+
+/**
+ * 在系统文件管理器里定位到包。
+ * 参数固定来自 resolvePackageFile，Windows 下用 verbatim 参数拼成
+ * explorer.exe /select,"绝对路径"，路径里的空格与中文都不经过 shell。
+ */
+function revealFile(root, name, options) {
+  const opts = options || {};
+  const file = resolvePackageFile(root, name);
+  const platform = opts.platform || process.platform;
+  const spawnImpl = opts.spawn || spawn;
+  let command = '';
+  let args = [];
+  if (platform === 'win32') {
+    command = 'explorer.exe';
+    args = ['/select,"' + file.absPath + '"'];
+  } else if (platform === 'darwin') {
+    command = 'open';
+    args = ['-R', file.absPath];
+  } else {
+    command = 'xdg-open';
+    args = [file.dir];
+  }
+  return new Promise(function (resolve, reject) {
+    let child;
+    try {
+      child = spawnImpl(command, args, {
+        detached: true,
+        stdio: 'ignore',
+        windowsVerbatimArguments: platform === 'win32'
+      });
+    } catch (err) {
+      reject(packageError('PACKAGE_REVEAL_FAILED', '打开文件夹失败：' + err.message));
+      return;
+    }
+    let settled = false;
+    child.once('error', function (err) {
+      if (settled) return;
+      settled = true;
+      reject(packageError('PACKAGE_REVEAL_FAILED', '打开文件夹失败：' + err.message));
+    });
+    child.once('spawn', function () {
+      if (settled) return;
+      settled = true;
+      if (child.unref) child.unref();
+      resolve({ ok: true, path: file.absPath, name: file.name, command: command });
+    });
+  });
+}
+
 function describe(baseDir) {
+  const last = lastRecord(baseDir);
+  if (last && last.name && isPackageName(last.name)) {
+    // 绝对路径按当前项目目录实时计算，换机器 / 换目录后也不会失效。
+    last.absPath = path.join(packageDir(baseDir), last.name);
+    last.exists = fs.existsSync(last.absPath);
+  }
   return {
     modes: MODES,
     output: OUTPUT_DIR + '/',
-    last: lastRecord(baseDir)
+    outputDirAbs: packageDir(baseDir),
+    last: last
   };
 }
 
@@ -510,6 +598,10 @@ module.exports = {
   OUTPUT_DIR: OUTPUT_DIR,
   MODES: MODES,
   isExcluded: isExcluded,
+  isPackageName: isPackageName,
+  packageDir: packageDir,
+  resolvePackageFile: resolvePackageFile,
+  revealFile: revealFile,
   describe: describe,
   createPackage: createPackage,
   writeZip: writeZip,

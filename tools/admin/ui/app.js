@@ -2471,42 +2471,72 @@ function packageLine(label, value) {
   return row;
 }
 
+/** 每个打包结果都带复制路径 / 打开所在文件夹 / 下载三个入口。 */
+function packageActions(data) {
+  const actions = el('div', 'pkg-actions');
+  const absent = data.exists === false;
+  const name = data.name || '';
+
+  const copy = el('button', 'btn btn-small', '复制路径');
+  copy.type = 'button';
+  copy.dataset.pkgAction = 'copy';
+  copy.dataset.pkgName = name;
+  copy.dataset.pkgPath = data.absPath || data.file || '';
+  actions.appendChild(copy);
+
+  if (!absent && name) {
+    const reveal = el('button', 'btn btn-small', '打开所在文件夹');
+    reveal.type = 'button';
+    reveal.dataset.pkgAction = 'reveal';
+    reveal.dataset.pkgName = name;
+    actions.appendChild(reveal);
+
+    const link = el('a', 'btn btn-small btn-primary', '下载');
+    link.href = API + '/package/download?name=' + encodeURIComponent(name);
+    link.setAttribute('download', name);
+    link.dataset.pkgAction = 'download';
+    link.dataset.pkgName = name;
+    actions.appendChild(link);
+  } else if (absent) {
+    actions.appendChild(el('span', 'muted', '文件已不存在，只能复制路径。'));
+  }
+  return actions;
+}
+
+function renderPackageInfo(box, data, options) {
+  const opts = options || {};
+  box.textContent = '';
+  box.hidden = false;
+  box.appendChild(packageLine('文件', data.name || ''));
+  box.appendChild(packageLine('完整路径', data.absPath || data.file || '路径不可用'));
+  box.appendChild(packageLine('大小', data.sizeText || formatBytes(data.size)));
+  box.appendChild(packageLine('条目数', data.entries == null ? '—' : String(data.entries)));
+  box.appendChild(packageLine('生成时间', data.createdAt ? formatTime(data.createdAt) : '—'));
+  box.appendChild(packageLine('模式', data.mode === 'light' ? '轻量' : '完整'));
+  if (opts.withMethod) {
+    box.appendChild(packageLine('压缩方式', (data.method || '—') +
+      (data.fallback ? '（tar 不可用，已回退到内置压缩）' : '')));
+  }
+  box.appendChild(packageActions(data));
+}
+
 function renderPackageLast() {
   const box = $('package-last');
   const last = state.package.last;
   box.textContent = '';
+  box.hidden = false;
   if (!last) {
+    box.className = 'pkg-last muted';
     box.textContent = '还没有打包记录。';
     return;
   }
-  box.appendChild(packageLine('文件', last.name || ''));
-  box.appendChild(packageLine('大小', last.sizeText || formatBytes(last.size)));
-  box.appendChild(packageLine('模式', last.mode === 'light' ? '轻量' : '完整'));
-  box.appendChild(packageLine('时间', last.createdAt ? formatTime(last.createdAt) : ''));
-  box.appendChild(packageLine('路径', last.file || ''));
+  box.className = 'pkg-last';
+  renderPackageInfo(box, last, {});
 }
 
 function renderPackageResult(data) {
-  const box = $('package-result');
-  box.textContent = '';
-  box.hidden = false;
+  renderPackageInfo($('package-result'), data, { withMethod: true });
   $('package-empty').hidden = true;
-
-  box.appendChild(packageLine('文件', data.name || ''));
-  box.appendChild(packageLine('大小', data.sizeText || formatBytes(data.size)));
-  box.appendChild(packageLine('模式', data.mode === 'light' ? '轻量' : '完整'));
-  box.appendChild(packageLine('压缩方式', (data.method || '') + (data.fallback ? '（tar 不可用，已回退到内置压缩）' : '')));
-  box.appendChild(packageLine('条目', String(data.entries || 0)));
-  box.appendChild(packageLine('路径', data.file || ''));
-
-  const actions = el('div', 'pkg-actions');
-  const copy = el('button', 'btn', '复制包路径');
-  copy.type = 'button';
-  copy.dataset.copy = data.file || '';
-  actions.appendChild(copy);
-  const tip = el('span', 'muted', '打开所在文件夹：复制路径后在资源管理器地址栏粘贴。');
-  actions.appendChild(tip);
-  box.appendChild(actions);
 }
 
 async function loadPackage() {
@@ -2540,7 +2570,7 @@ async function runPackage() {
     renderPackageLast();
     stateBadge.textContent = '已完成';
     stateBadge.className = 'badge badge-ok';
-    $('package-hint').textContent = '已生成：' + data.file;
+    $('package-hint').textContent = '已生成：' + (data.absPath || data.file);
     toast('打包完成：' + data.name, 'ok');
   } catch (err) {
     stateBadge.textContent = '失败';
@@ -2551,6 +2581,41 @@ async function runPackage() {
     state.package.busy = false;
     btn.disabled = false;
     btn.textContent = '开始打包';
+  }
+}
+
+async function handlePackageAction(event) {
+  const trigger = event.target.closest('[data-pkg-action]');
+  if (!trigger) return;
+  const action = trigger.dataset.pkgAction;
+  const name = trigger.dataset.pkgName || '';
+
+  if (action === 'copy') {
+    const ok = await copyText(trigger.dataset.pkgPath || '');
+    toast(ok ? '完整路径已复制' : '复制失败，请手动选择路径', ok ? 'ok' : 'error');
+    return;
+  }
+  if (action === 'download') {
+    // 交给浏览器按服务端 Content-Disposition 流式下载，不把整包读进内存。
+    toast('开始下载：' + name, 'ok');
+    return;
+  }
+  if (action === 'reveal') {
+    const label = trigger.textContent;
+    trigger.disabled = true;
+    trigger.textContent = '正在打开…';
+    try {
+      const data = await api('/package/reveal', {
+        method: 'POST', csrf: true, body: { name: name }
+      });
+      toast('已在资源管理器中定位到该文件', 'ok');
+      $('package-hint').textContent = '已在资源管理器中打开：' + (data.path || name);
+    } catch (err) {
+      toast('打开文件夹失败：' + err.message, 'error');
+    } finally {
+      trigger.disabled = false;
+      trigger.textContent = label;
+    }
   }
 }
 
@@ -3308,13 +3373,7 @@ function bind() {
 
   // 一键打包
   $('btn-package').addEventListener('click', runPackage);
-  $('package-result').addEventListener('click', function (event) {
-    const btn = event.target.closest('[data-copy]');
-    if (!btn) return;
-    copyText(btn.dataset.copy).then(function (ok) {
-      toast(ok ? '包路径已复制' : '复制失败，请手动选择路径', ok ? 'ok' : 'error');
-    });
-  });
+  $('view-package').addEventListener('click', handlePackageAction);
 
   // SSH 面板
   $('btn-ssh-keygen').addEventListener('click', keygenSsh);
