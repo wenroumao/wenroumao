@@ -5,8 +5,8 @@
 # Site
 title: wenroumao
 subtitle:
-description: "一个基于 Hexo + Fomalhaut 主题的演示站点"
-keywords: "Hexo,Butterfly,Fomalhaut,博客,主题,卡片式UI"
+description: 一个基于 Hexo + wenroumao 主题的演示站点
+keywords: Hexo,Butterfly,wenroumao,博客,主题,卡片式UI
 author: wenroumao
 language: zh-CN
 timezone: ""
