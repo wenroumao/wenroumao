@@ -27,7 +27,9 @@ function createStandaloneServer(options) {
     // 生成器沿用 server.js 的实现：只跑 node_modules/hexo/bin/hexo generate，
     // 失败只会让“生成”这一步报错，不会带走后台进程。
     runGenerate: options.runGenerate || createAdmin.createHexoRunner(baseDir),
-    sourceOptions: options.sourceOptions
+    sourceOptions: options.sourceOptions,
+    packageOptions: options.packageOptions,
+    sshOptions: options.sshOptions
   });
 
   return http.createServer(function (req, res) {

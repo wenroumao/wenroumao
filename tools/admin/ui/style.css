@@ -1121,3 +1121,69 @@ html[data-theme="dark"] .diff-del { background: rgba(224, 112, 79, .13); }
 .restore-result.is-ok { border-color: var(--accent); }
 .restore-result.is-warn { border-color: var(--danger); }
 .modal-files { max-height: 180px; overflow: auto; margin: 8px 0 0; padding-left: 18px; font: 11.5px/1.6 var(--mono); }
+
+/* ------------------------------------------------------------ 一键打包 */
+.pkg-modes { display: grid; gap: 10px; margin: 12px 0 4px; }
+.pkg-mode {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  background: var(--paper-2);
+  cursor: pointer;
+  transition: border-color .16s ease, background .16s ease;
+}
+.pkg-mode:hover { border-color: var(--line-strong); }
+.pkg-mode:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+.pkg-mode input { margin: 3px 0 0; accent-color: var(--accent); }
+.pkg-mode-body { display: grid; gap: 2px; }
+.pkg-mode-body strong { font-size: 13.5px; }
+.pkg-mode-desc { font-size: 12px; color: var(--muted); line-height: 1.55; }
+.pkg-result { display: grid; gap: 0; border: 1px solid var(--line); }
+.pkg-result:empty { display: none; }
+.pkg-line {
+  display: grid;
+  grid-template-columns: 84px minmax(0, 1fr);
+  gap: 10px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12.5px;
+}
+.pkg-line:last-of-type { border-bottom: 0; }
+.pkg-label { color: var(--muted); }
+.pkg-value { font-family: var(--mono); word-break: break-all; }
+.pkg-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 12px; border-top: 1px solid var(--line); }
+.pkg-actions .btn { margin: 0; }
+.pkg-actions .muted { font-size: 12px; }
+.pkg-last { display: grid; gap: 0; border: 1px solid var(--line); }
+.guide-list { margin: 10px 0 0; padding-left: 22px; display: grid; gap: 8px; font-size: 13px; line-height: 1.7; }
+.guide-list code { background: var(--accent-soft); padding: 1px 5px; border-radius: 2px; }
+
+/* ------------------------------------------------------------ SSH 面板 */
+.ssh-steps { display: grid; gap: 18px; }
+.ssh-step { position: relative; }
+.step-num {
+  margin: 0 0 4px;
+  font: 11px/1 var(--mono);
+  letter-spacing: .18em;
+  color: var(--accent);
+}
+.ssh-kv { display: grid; gap: 6px; margin: 10px 0 2px; }
+.ssh-kv-row { display: flex; justify-content: space-between; gap: 12px; padding: 7px 10px; border: 1px solid var(--line); font-size: 12px; }
+.ssh-kv-row .is-ok { color: var(--ok); }
+.ssh-kv-row .is-missing { color: var(--muted); }
+.copy-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 10px; }
+.copy-row code { word-break: break-all; }
+.fingerprint { font: 12px/1.5 var(--mono); color: var(--muted); }
+.ssh-public {
+  margin: 10px 0 0;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  background: var(--paper-2);
+  font: 11.5px/1.7 var(--mono);
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 140px;
+  overflow: auto;
+}

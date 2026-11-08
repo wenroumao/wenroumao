@@ -25,6 +25,8 @@ _probe_node.txt
 bak_probe_out.txt
 # 本地备份（bak/ 目录、*.bak、*.bak-before-* 等）
 bak/
+# 后台一键打包产物（backup/package/*.zip）
+backup/
 *.bak
 *.bak-*
 # 本地素材、检查产物

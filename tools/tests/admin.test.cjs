@@ -15,6 +15,10 @@ const { execFileSync } = require('child_process');
 const core = require('../admin/core.js');
 const deploy = require('../admin/deploy.js');
 const createAdminServer = require('../admin/server.js');
+const packager = require('../admin/package.js');
+const ssh = require('../admin/ssh.js');
+const source = require('../admin/source.js');
+const crypto = require('crypto');
 
 const CONFIG_SITE = [
   'title: Demo',
@@ -1265,3 +1269,359 @@ test('独立入口：不依赖 hexo 即可启动并提供后台页面', async fu
   }
 });
 
+
+/* ------------------------------------------------------------ 打包与 SSH */
+
+function writeFixtureFile(root, rel, content) {
+  const file = path.join(root, rel.replace(/\//g, path.sep));
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, content, 'utf8');
+}
+
+function makePackageFixture() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fomalhaut-pkg-'));
+  const project = path.join(root, 'project');
+  const home = path.join(root, 'home');
+  writeFixtureFile(project, '_config.yml', 'title: demo\n');
+  writeFixtureFile(project, 'package.json', '{"name":"demo"}\n');
+  writeFixtureFile(project, 'source/_posts/hello.md', '# hello\n');
+  writeFixtureFile(project, 'source/中文/说明.md', '中文文件名\n');
+  writeFixtureFile(project, '.admin-auth', 'ADMIN_PASSWORD=SECRET-SENTINEL\n');
+  writeFixtureFile(project, '.admin-deploy.json', '{"token":"TOKEN-SENTINEL"}\n');
+  writeFixtureFile(project, '.admin-oss.json',
+    '{"accessKeyId":"OSS-AK","accessKeySecret":"OSS-SECRET-SENTINEL","bucket":"demo","region":"oss-cn-hangzhou"}\n');
+  writeFixtureFile(project, '.admin-oss.json.tmp-123', 'OSS-TMP-SENTINEL\n');
+  writeFixtureFile(project, 'bak/admin/restore/secret.md', 'BACKUP-SENTINEL\n');
+  writeFixtureFile(project, '.deploy_git/config', 'deploy\n');
+  writeFixtureFile(project, 'node_modules/demo/index.js', 'module.exports = 1;\n');
+  writeFixtureFile(project, 'public/index.html', '<html></html>\n');
+  writeFixtureFile(project, 'backup/package/old.zip', 'old-package\n');
+  writeFixtureFile(project, '.git/config', '[core]\n');
+  writeFixtureFile(project, '.git/HEAD', 'ref: refs/heads/main\n');
+  writeFixtureFile(project, '.git/index.lock', 'lock\n');
+  writeFixtureFile(project, '.ssh/id_ed25519', 'PROJECT-SSH-SENTINEL\n');
+  writeFixtureFile(home, '.ssh/id_ed25519', 'HOME-SSH-PRIVATE-SENTINEL\n');
+  writeFixtureFile(home, '.ssh/id_ed25519.pub',
+    'ssh-ed25519 ' + Buffer.from('home-key-blob').toString('base64') + ' home@test\n');
+  return { root: root, project: project, home: home };
+}
+
+test('打包：轻量包排除凭据/依赖/产物/SSH，包含迁移说明与中文文件名', async function () {
+  const fx = makePackageFixture();
+  const srv = await startServer(fx.project, null, {
+    packageOptions: { home: fx.home, compressor: 'node' }
+  });
+  try {
+    const auth = await login(srv.base);
+    const info = await call(srv.base, '/admin/api/package', { cookie: auth.cookie });
+    assert.equal(info.status, 200);
+    assert.equal(info.json.modes.length, 2);
+    assert.deepEqual(info.json.modes.map(function (m) { return m.id; }), ['full', 'light']);
+    assert.equal(info.json.last, null);
+    assert.equal(info.json.output, 'backup/package/');
+
+    const res = await call(srv.base, '/admin/api/package', {
+      method: 'POST', cookie: auth.cookie, csrf: auth.csrf, body: { mode: 'light' }
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.json.ok, true);
+    assert.equal(res.json.mode, 'light');
+    assert.equal(res.json.method, 'node');
+    assert.match(res.json.name, /^wenroumao-blog-\d{8}-\d{4}(-\d+)?\.zip$/);
+    assert.ok(res.json.size > 0);
+    assert.match(res.json.file, /^backup\/package\//);
+    assert.ok(!JSON.stringify(res.json).includes('SENTINEL'));
+    assert.ok(!JSON.stringify(res.json).includes('OSS-SECRET'));
+
+    const zipFile = path.join(fx.project, res.json.file.replace(/\//g, path.sep));
+    assert.ok(fs.existsSync(zipFile));
+    const entries = packager.listEntries(zipFile);
+    assert.ok(entries.indexOf('MIGRATE.md') >= 0);
+    assert.ok(entries.indexOf('.env.example') >= 0);
+    assert.ok(entries.indexOf('_config.yml') >= 0);
+    assert.ok(entries.indexOf('source/中文/说明.md') >= 0);
+
+    [
+      '.admin-auth', '.admin-deploy.json', '.admin-oss.json', '.admin-oss.json.tmp-123',
+      '.deploy_git/config', 'node_modules/demo/index.js', 'public/index.html', 'backup/package/old.zip',
+      '.git/config', '.git/index.lock', '.ssh/id_ed25519', 'bak/admin/restore/secret.md'
+    ].forEach(function (name) {
+      assert.equal(entries.indexOf(name), -1, '不应包含 ' + name);
+    });
+    assert.ok(entries.every(function (name) {
+      return !/^(bak|backup|node_modules|public|\.git|\.deploy_git|\.ssh)\//.test(name);
+    }));
+
+    const migrate = packager.migrateMarkdown('light', '2026-11-08T00:00:00.000Z');
+    assert.match(migrate, /npm install/);
+    assert.match(migrate, /start-admin\.cmd/);
+    assert.match(migrate, /\.admin-auth/);
+    assert.match(migrate, /ssh-keygen/);
+    assert.match(migrate, /github\.com\/settings\/keys/);
+    assert.match(migrate, /vercel\.json/);
+    assert.ok(!/SECRET-SENTINEL|TOKEN-SENTINEL|PRIVATE/.test(migrate));
+
+    const env = packager.envExample();
+    ['ADMIN_USER=', 'ADMIN_PASSWORD=', 'ADMIN_DEPLOY_TOKEN='].forEach(function (name) {
+      assert.ok(env.indexOf(name) >= 0, '缺少变量名 ' + name);
+    });
+    assert.ok(!/SECRET-SENTINEL|TOKEN-SENTINEL/.test(env));
+
+    const after = await call(srv.base, '/admin/api/package', { cookie: auth.cookie });
+    assert.equal(after.json.last && after.json.last.name, res.json.name);
+  } finally {
+    await srv.close();
+    cleanup(fx.root);
+  }
+});
+
+test('打包：完整模式保留 .git 与 public，仍排除凭据与 index.lock', async function () {
+  const fx = makePackageFixture();
+  const srv = await startServer(fx.project, null, {
+    packageOptions: { home: fx.home, compressor: 'node' }
+  });
+  try {
+    const auth = await login(srv.base);
+    const res = await call(srv.base, '/admin/api/package', {
+      method: 'POST', cookie: auth.cookie, csrf: auth.csrf, body: { mode: 'full' }
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.json.mode, 'full');
+    const zipFile = path.join(fx.project, res.json.file.replace(/\//g, path.sep));
+    const entries = packager.listEntries(zipFile);
+    assert.ok(entries.indexOf('.git/config') >= 0);
+    assert.ok(entries.indexOf('public/index.html') >= 0);
+    assert.equal(entries.indexOf('.git/index.lock'), -1);
+    assert.equal(entries.indexOf('.admin-auth'), -1);
+    assert.equal(entries.indexOf('.admin-deploy.json'), -1);
+    assert.equal(entries.indexOf('.admin-oss.json'), -1);
+    assert.equal(entries.indexOf('.admin-oss.json.tmp-123'), -1);
+    assert.equal(entries.indexOf('node_modules/demo/index.js'), -1);
+    assert.equal(entries.indexOf('bak/admin/restore/secret.md'), -1);
+    assert.equal(entries.indexOf('.ssh/id_ed25519'), -1);
+    assert.ok(entries.every(function (name) { return !name.startsWith('backup/'); }));
+  } finally {
+    await srv.close();
+    cleanup(fx.root);
+  }
+});
+
+test('打包：缺 CSRF 被拒，且不会生成新包', async function () {
+  const fx = makePackageFixture();
+  const srv = await startServer(fx.project, null, {
+    packageOptions: { home: fx.home, compressor: 'node' }
+  });
+  try {
+    const auth = await login(srv.base);
+    const res = await call(srv.base, '/admin/api/package', {
+      method: 'POST', cookie: auth.cookie, body: { mode: 'light' }
+    });
+    assert.equal(res.status, 403);
+    const dir = path.join(fx.project, 'backup', 'package');
+    assert.equal(fs.existsSync(dir) && fs.readdirSync(dir).filter(function (n) {
+      return /^wenroumao-blog-/.test(n);
+    }).length, 0);
+  } finally {
+    await srv.close();
+    cleanup(fx.root);
+  }
+});
+
+test('打包：不支持的模式返回 400', async function () {
+  const fx = makePackageFixture();
+  const srv = await startServer(fx.project, null, {
+    packageOptions: { home: fx.home, compressor: 'node' }
+  });
+  try {
+    const auth = await login(srv.base);
+    const res = await call(srv.base, '/admin/api/package', {
+      method: 'POST', cookie: auth.cookie, csrf: auth.csrf, body: { mode: 'everything' }
+    });
+    assert.equal(res.status, 400);
+    assert.equal(res.json.error.code, 'PACKAGE_INVALID_MODE');
+  } finally {
+    await srv.close();
+    cleanup(fx.root);
+  }
+});
+
+function makeSshHome() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fomalhaut-ssh-'));
+  return root;
+}
+
+test('SSH：只读接口只报存在性与公钥，不回传私钥', async function () {
+  const home = makeSshHome();
+  const privateText = 'PRIVATE-SENTINEL-KEY-MATERIAL\n';
+  const publicText = 'ssh-ed25519 ' + Buffer.from('some-key-blob').toString('base64') + ' test@example\n';
+  writeFixtureFile(home, '.ssh/id_ed25519', privateText);
+  writeFixtureFile(home, '.ssh/id_ed25519.pub', publicText);
+  const srv = await startServer(path.join(home, 'project'), null, { sshOptions: { home: home } });
+  fs.mkdirSync(path.join(home, 'project'), { recursive: true });
+  try {
+    const auth = await login(srv.base);
+    const res = await call(srv.base, '/admin/api/ssh', { cookie: auth.cookie });
+    assert.equal(res.status, 200);
+    assert.equal(res.json.keys.ed25519.private, true);
+    assert.equal(res.json.keys.ed25519.public, true);
+    assert.equal(res.json.keys.rsa.private, false);
+    assert.equal(res.json.publicKey, publicText.trim());
+    assert.match(res.json.fingerprint, /^SHA256:/);
+    assert.equal(res.json.testCommand, 'ssh -T git@github.com');
+    assert.ok(!JSON.stringify(res.json).includes('PRIVATE-SENTINEL'));
+    assert.ok(!JSON.stringify(res.json).includes('privateKey'));
+
+    const raw = await fetch(srv.base + '/admin/api/ssh', { headers: { Cookie: auth.cookie } });
+    assert.equal(raw.headers.get('cache-control'), 'no-store');
+  } finally {
+    await srv.close();
+    cleanup(home);
+  }
+});
+
+test('SSH：没有密钥时只报不存在，界面拿到空公钥', async function () {
+  const home = makeSshHome();
+  fs.mkdirSync(path.join(home, 'project'), { recursive: true });
+  const srv = await startServer(path.join(home, 'project'), null, { sshOptions: { home: home } });
+  try {
+    const auth = await login(srv.base);
+    const res = await call(srv.base, '/admin/api/ssh', { cookie: auth.cookie });
+    assert.equal(res.status, 200);
+    assert.equal(res.json.active, '');
+    assert.equal(res.json.publicKey, '');
+    assert.equal(res.json.keys.ed25519.private, false);
+    assert.equal(res.json.keys.rsa.public, false);
+  } finally {
+    await srv.close();
+    cleanup(home);
+  }
+});
+
+test('SSH keygen：目标已存在时拒绝覆盖，私钥内容保持不变', async function () {
+  const home = makeSshHome();
+  const privateText = 'PRIVATE-DO-NOT-OVERWRITE\n';
+  writeFixtureFile(home, '.ssh/id_ed25519', privateText);
+  writeFixtureFile(home, '.ssh/id_ed25519.pub',
+    'ssh-ed25519 ' + Buffer.from('existing').toString('base64') + ' old@test\n');
+  fs.mkdirSync(path.join(home, 'project'), { recursive: true });
+  const srv = await startServer(path.join(home, 'project'), null, {
+    sshOptions: { home: home, runKeygen: function () { throw new Error('不应该执行 ssh-keygen'); } }
+  });
+  try {
+    const auth = await login(srv.base);
+    const res = await call(srv.base, '/admin/api/ssh/keygen', {
+      method: 'POST', cookie: auth.cookie, csrf: auth.csrf, body: {}
+    });
+    assert.equal(res.status, 409);
+    assert.equal(res.json.error.code, 'SSH_KEY_EXISTS');
+    assert.equal(fs.readFileSync(path.join(home, '.ssh', 'id_ed25519'), 'utf8'), privateText);
+    assert.ok(!JSON.stringify(res.json).includes('PRIVATE-DO-NOT-OVERWRITE'));
+  } finally {
+    await srv.close();
+    cleanup(home);
+  }
+});
+
+test('SSH keygen：成功时返回公钥，不返回私钥；缺 CSRF 被拒', async function () {
+  const home = makeSshHome();
+  fs.mkdirSync(path.join(home, 'project'), { recursive: true });
+  let called = 0;
+  const srv = await startServer(path.join(home, 'project'), null, {
+    sshOptions: {
+      home: home,
+      runKeygen: function (task) {
+        called += 1;
+        fs.writeFileSync(task.publicFile,
+          'ssh-ed25519 ' + Buffer.from('generated-key').toString('base64') + ' admin@local\n', 'utf8');
+        return Promise.resolve();
+      }
+    }
+  });
+  try {
+    const auth = await login(srv.base);
+    const denied = await call(srv.base, '/admin/api/ssh/keygen', {
+      method: 'POST', cookie: auth.cookie, body: {}
+    });
+    assert.equal(denied.status, 403);
+    assert.equal(called, 0);
+
+    const res = await call(srv.base, '/admin/api/ssh/keygen', {
+      method: 'POST', cookie: auth.cookie, csrf: auth.csrf, body: {}
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.json.ok, true);
+    assert.equal(res.json.algorithm, 'ed25519');
+    assert.equal(res.json.passphrase, false);
+    assert.match(res.json.publicKey, /^ssh-ed25519 /);
+    assert.match(res.json.fingerprint, /^SHA256:/);
+    assert.equal(res.json.files.private, '~/.ssh/id_ed25519');
+    assert.ok(!JSON.stringify(res.json).includes('PRIVATE'));
+    assert.equal(called, 1);
+  } finally {
+    await srv.close();
+    cleanup(home);
+  }
+});
+
+test('SSH 测试：按原始输出分类，不只给退出码', function () {
+  const ok = ssh.classify({
+    code: 1,
+    output: "Hi demo! You've successfully authenticated, but GitHub does not provide shell access.\n"
+  });
+  assert.equal(ok.status, 'ok');
+  assert.equal(ok.label, '认证成功');
+
+  const noKey = ssh.classify({ code: 255, output: 'git@github.com: Permission denied (publickey).\r\n' });
+  assert.equal(noKey.status, 'no-key');
+  assert.equal(noKey.label, '公钥未添加');
+
+  const offline = ssh.classify({
+    code: 255,
+    output: 'ssh: connect to host github.com port 22: Connection timed out\r\n'
+  });
+  assert.equal(offline.status, 'network');
+  assert.equal(offline.label, '网络不通');
+
+  const timeout = ssh.classify({ timedOut: true, output: '' });
+  assert.equal(timeout.status, 'timeout');
+  assert.equal(timeout.label, '超时');
+
+  const missing = ssh.classify({ errorCode: 'ENOENT', output: '' });
+  assert.equal(missing.status, 'network');
+});
+
+test('SSH 测试：接口返回分类结果，缺 CSRF 被拒', async function () {
+  const home = makeSshHome();
+  fs.mkdirSync(path.join(home, 'project'), { recursive: true });
+  const srv = await startServer(path.join(home, 'project'), null, {
+    sshOptions: {
+      home: home,
+      runTest: function () {
+        return Promise.resolve({
+          code: 1,
+          output: "Hi demo! You've successfully authenticated, but GitHub does not provide shell access.\n"
+        });
+      }
+    }
+  });
+  try {
+    const auth = await login(srv.base);
+    const denied = await call(srv.base, '/admin/api/ssh/test', {
+      method: 'POST', cookie: auth.cookie, body: {}
+    });
+    assert.equal(denied.status, 403);
+
+    const res = await call(srv.base, '/admin/api/ssh/test', {
+      method: 'POST', cookie: auth.cookie, csrf: auth.csrf, body: {}
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.json.status, 'ok');
+    assert.equal(res.json.ok, true);
+    assert.equal(res.json.label, '认证成功');
+    assert.equal(res.json.command, 'ssh -T git@github.com');
+    assert.match(res.json.raw, /successfully authenticated/);
+  } finally {
+    await srv.close();
+    cleanup(home);
+  }
+});

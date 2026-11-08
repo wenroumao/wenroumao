@@ -16,6 +16,8 @@ const { spawn } = require('child_process');
 const core = require('./core');
 const deploy = require('./deploy');
 const source = require('./source');
+const packager = require('./package');
+const ssh = require('./ssh');
 
 const COOKIE_NAME = 'fomalhaut_admin';
 const UI_DIR = path.join(__dirname, 'ui');
@@ -128,7 +130,12 @@ function createAdminServer(options) {
   const jobs = new Map();
   // 源码页的仓库/分支可注入（测试用临时裸仓库，线上走默认的 wenroumao/source）。
   const sourceOptions = opts.sourceOptions || {};
+  // 打包与 SSH 的 home/压缩器/执行器都可注入，测试里不碰真实 ~/.ssh、不联网。
+  const packageOptions = opts.packageOptions || {};
+  const sshOptions = opts.sshOptions || {};
   let sourceBusy = false;
+  let packageBusy = false;
+  let sshBusy = false;
   let currentJobId = '';
   let lastJobId = '';
   let pendingAuto = false;
@@ -956,6 +963,101 @@ function createAdminServer(options) {
         });
       }).catch(function (err) { fail(res, 400, err.message); }).then(function () {
         sourceBusy = false;
+      });
+    }
+
+    /* --------------------------------------------------------- 一键打包 */
+    // GET 只读：可选模式 + 上次生成记录（都在 backup/package/.last.json）。
+    if (apiPath === '/package' && isRead) {
+      try {
+        return sendJson(res, 200, packager.describe(baseDir));
+      } catch (err) {
+        return fail(res, 500, err.message);
+      }
+    }
+
+    // POST：同步打包（复制 + 压缩），期间 packageBusy 挡住并发请求。
+    if (apiPath === '/package' && method === 'POST') {
+      if (packageBusy) return fail(res, 409, '上一次打包还没结束，等它完成再试。');
+      packageBusy = true;
+      return readBody(req, 16 * 1024).then(function (body) {
+        return packager.createPackage(baseDir, {
+          mode: body && body.mode,
+          compressor: packageOptions.compressor,
+          home: packageOptions.home,
+          log: function () { /* 进度由返回值带回 */ }
+        }).then(function (result) {
+          sendJson(res, 200, result);
+        }).catch(function (err) {
+          const code = err && err.code ? err.code : 'PACKAGE_FAILED';
+          const status = code === 'PACKAGE_INVALID_MODE' ? 400
+            : code === 'PACKAGE_BUSY' ? 409
+              : code === 'PACKAGE_NO_PROJECT' ? 400 : 500;
+          sendJson(res, status, {
+            ok: false,
+            error: { code: code, message: (err && err.message) || '打包失败。' }
+          });
+        }).then(function () { packageBusy = false; });
+      }).catch(function (err) {
+        packageBusy = false;
+        fail(res, 400, err.message);
+      });
+    }
+
+    /* --------------------------------------------------------- SSH 快捷面板 */
+    // GET 只读：只报告私钥/公钥是否存在、公钥全文与指纹，绝不读私钥。
+    if (apiPath === '/ssh' && isRead) {
+      try {
+        return sendJson(res, 200, ssh.describe({ home: sshOptions.home }));
+      } catch (err) {
+        return fail(res, 500, err.message);
+      }
+    }
+
+    // POST：生成 ed25519；目标文件存在就拒绝（409），绝不覆盖。
+    if (apiPath === '/ssh/keygen' && method === 'POST') {
+      if (sshBusy) return fail(res, 409, '上一次 SSH 操作还没结束，等它完成再试。');
+      sshBusy = true;
+      return readBody(req, 8 * 1024).then(function () {
+        return ssh.generateKey({
+          home: sshOptions.home,
+          runKeygen: sshOptions.runKeygen
+        }).then(function (result) {
+          sendJson(res, 200, Object.assign({ ok: true }, result));
+        }).catch(function (err) {
+          const code = err && err.code ? err.code : 'SSH_KEYGEN_FAILED';
+          const status = code === 'SSH_KEY_EXISTS' ? 409 : 500;
+          sendJson(res, status, {
+            ok: false,
+            error: { code: code, message: (err && err.message) || '生成密钥失败。' }
+          });
+        }).then(function () { sshBusy = false; });
+      }).catch(function (err) {
+        sshBusy = false;
+        fail(res, 400, err.message);
+      });
+    }
+
+    // POST：执行 ssh -T 并分类；认证失败也返回 200 + 分类结果，不是只给退出码。
+    if (apiPath === '/ssh/test' && method === 'POST') {
+      if (sshBusy) return fail(res, 409, '上一次 SSH 操作还没结束，等它完成再试。');
+      sshBusy = true;
+      return readBody(req, 8 * 1024).then(function () {
+        return ssh.testConnection({
+          home: sshOptions.home,
+          runTest: sshOptions.runTest,
+          timeoutMs: sshOptions.timeoutMs
+        }).then(function (result) {
+          sendJson(res, 200, Object.assign({ ok: result.ok }, result));
+        }).catch(function (err) {
+          sendJson(res, 500, {
+            ok: false,
+            error: { code: (err && err.code) || 'SSH_TEST_FAILED', message: (err && err.message) || 'SSH 测试失败。' }
+          });
+        }).then(function () { sshBusy = false; });
+      }).catch(function (err) {
+        sshBusy = false;
+        fail(res, 400, err.message);
       });
     }
 

@@ -28,7 +28,9 @@ const state = {
   features: [],
   deploy: null,
   history: { items: [], paths: [], path: '', action: '' },
-  source: { info: null, offset: 0, hasMore: false, busy: false }
+  source: { info: null, offset: 0, hasMore: false, busy: false },
+  package: { modes: [], last: null, selected: 'full', busy: false },
+  ssh: { info: null, busy: false }
 };
 
 function $(id) { return document.getElementById(id); }
@@ -176,6 +178,8 @@ const VIEW_META = {
   features: { kicker: 'Switches', title: '功能开关' },
   history: { kicker: 'Revisions', title: '修改历史' },
   source: { kicker: 'Source', title: '源码' },
+  package: { kicker: 'Package', title: '一键打包' },
+  ssh: { kicker: 'SSH', title: 'SSH 密钥' },
   publish: { kicker: 'Publish', title: '生成与推送' }
 };
 
@@ -190,7 +194,7 @@ async function switchView(name, force) {
     state.dirty = false;
     updateDirtyUI();
   }
-  ['posts', 'editor', 'config', 'features', 'history', 'source', 'publish'].forEach(function (view) {
+  ['posts', 'editor', 'config', 'features', 'history', 'source', 'package', 'ssh', 'publish'].forEach(function (view) {
     $('view-' + view).hidden = view !== name;
   });
   document.querySelectorAll('.nav-item').forEach(function (btn) {
@@ -206,6 +210,8 @@ async function switchView(name, force) {
   if (name === 'features') loadFeatures();
   if (name === 'history') loadHistory();
   if (name === 'source') loadSource();
+  if (name === 'package') loadPackage();
+  if (name === 'ssh') loadSsh();
   if (name === 'publish') loadPublish();
 }
 
@@ -1053,6 +1059,260 @@ async function restoreSource() {
   }
 }
 
+/* ------------------------------------------------------------ 一键打包 */
+
+async function copyText(text) {
+  const value = String(text == null ? '' : text);
+  if (!value) return false;
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(value);
+      return true;
+    }
+  } catch (e) { /* 降级到 execCommand */ }
+  const area = el('textarea');
+  area.value = value;
+  area.style.position = 'fixed';
+  area.style.opacity = '0';
+  document.body.appendChild(area);
+  area.select();
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+  area.remove();
+  return ok;
+}
+
+function renderPackageModes() {
+  const box = $('package-modes');
+  box.textContent = '';
+  state.package.modes.forEach(function (mode) {
+    const label = el('label', 'pkg-mode');
+    const input = el('input');
+    input.type = 'radio';
+    input.name = 'package-mode';
+    input.value = mode.id;
+    input.checked = mode.id === state.package.selected;
+    input.addEventListener('change', function () {
+      if (input.checked) state.package.selected = mode.id;
+    });
+    const body = el('span', 'pkg-mode-body');
+    body.appendChild(el('strong', '', mode.label));
+    body.appendChild(el('span', 'pkg-mode-desc', mode.description));
+    label.appendChild(input);
+    label.appendChild(body);
+    box.appendChild(label);
+  });
+}
+
+function packageLine(label, value) {
+  const row = el('div', 'pkg-line');
+  row.appendChild(el('span', 'pkg-label', label));
+  row.appendChild(el('span', 'pkg-value', value));
+  return row;
+}
+
+function renderPackageLast() {
+  const box = $('package-last');
+  const last = state.package.last;
+  box.textContent = '';
+  if (!last) {
+    box.textContent = '还没有打包记录。';
+    return;
+  }
+  box.appendChild(packageLine('文件', last.name || ''));
+  box.appendChild(packageLine('大小', last.sizeText || formatBytes(last.size)));
+  box.appendChild(packageLine('模式', last.mode === 'light' ? '轻量' : '完整'));
+  box.appendChild(packageLine('时间', last.createdAt ? formatTime(last.createdAt) : ''));
+  box.appendChild(packageLine('路径', last.file || ''));
+}
+
+function renderPackageResult(data) {
+  const box = $('package-result');
+  box.textContent = '';
+  box.hidden = false;
+  $('package-empty').hidden = true;
+
+  box.appendChild(packageLine('文件', data.name || ''));
+  box.appendChild(packageLine('大小', data.sizeText || formatBytes(data.size)));
+  box.appendChild(packageLine('模式', data.mode === 'light' ? '轻量' : '完整'));
+  box.appendChild(packageLine('压缩方式', (data.method || '') + (data.fallback ? '（tar 不可用，已回退到内置压缩）' : '')));
+  box.appendChild(packageLine('条目', String(data.entries || 0)));
+  box.appendChild(packageLine('路径', data.file || ''));
+
+  const actions = el('div', 'pkg-actions');
+  const copy = el('button', 'btn', '复制包路径');
+  copy.type = 'button';
+  copy.dataset.copy = data.file || '';
+  actions.appendChild(copy);
+  const tip = el('span', 'muted', '打开所在文件夹：复制路径后在资源管理器地址栏粘贴。');
+  actions.appendChild(tip);
+  box.appendChild(actions);
+}
+
+async function loadPackage() {
+  try {
+    const data = await api('/package');
+    state.package.modes = data.modes || [];
+    state.package.last = data.last || null;
+    renderPackageModes();
+    renderPackageLast();
+  } catch (err) {
+    if (err.status !== 401) toast('读取打包信息失败：' + err.message, 'error');
+  }
+}
+
+async function runPackage() {
+  if (state.package.busy) return;
+  state.package.busy = true;
+  const btn = $('btn-package');
+  const stateBadge = $('package-state');
+  btn.disabled = true;
+  btn.textContent = '正在打包…';
+  stateBadge.textContent = '打包中';
+  stateBadge.className = 'badge badge-warn';
+  $('package-hint').textContent = '正在收集文件 → 写入 MIGRATE.md / .env.example → 压缩，请稍等。';
+  try {
+    const data = await api('/package', {
+      method: 'POST', csrf: true, body: { mode: state.package.selected }
+    });
+    state.package.last = data;
+    renderPackageResult(data);
+    renderPackageLast();
+    stateBadge.textContent = '已完成';
+    stateBadge.className = 'badge badge-ok';
+    $('package-hint').textContent = '已生成：' + data.file;
+    toast('打包完成：' + data.name, 'ok');
+  } catch (err) {
+    stateBadge.textContent = '失败';
+    stateBadge.className = 'badge badge-err';
+    $('package-hint').textContent = err.message;
+    toast('打包失败：' + err.message, 'error');
+  } finally {
+    state.package.busy = false;
+    btn.disabled = false;
+    btn.textContent = '开始打包';
+  }
+}
+
+/* ------------------------------------------------------------ SSH 面板 */
+
+function sshKvRow(name, text, ok) {
+  const row = el('div', 'ssh-kv-row');
+  row.appendChild(el('code', '', name));
+  const badge = el('span', ok ? 'is-ok' : 'is-missing', text);
+  row.appendChild(badge);
+  return row;
+}
+
+function renderSsh(data) {
+  state.ssh.info = data;
+  const keys = data.keys || {};
+  const active = data.active || '';
+  const ed = keys.ed25519 || {};
+  const hasEd = !!(ed.private || ed.public);
+  const publicKey = data.publicKey || '';
+
+  $('ssh-summary').textContent = active
+    ? (keys[active].label + ' 密钥已存在')
+    : '还没有 SSH 密钥';
+  $('ssh-note').textContent = active
+    ? '私钥只保存在本机 ~/.ssh；这里只展示公钥与指纹，接口不回传私钥。'
+    : '可以点下面按钮生成，或按页面提示手动生成。生成后私钥不会再回传页面。';
+
+  const stateBadge = $('ssh-state');
+  stateBadge.textContent = active ? '可用' : '待生成';
+  stateBadge.className = 'badge ' + (active ? 'badge-ok' : 'badge-warn');
+
+  const box = $('ssh-exists');
+  box.textContent = '';
+  ['ed25519', 'rsa'].forEach(function (id) {
+    const item = keys[id] || {};
+    box.appendChild(sshKvRow('~/.ssh/' + (id === 'ed25519' ? 'id_ed25519' : 'id_rsa'),
+      (item.private ? '私钥存在' : '私钥不存在') + ' · ' + (item.public ? '公钥存在' : '公钥不存在'),
+      item.private || item.public));
+  });
+
+  $('ssh-public').textContent = publicKey || '（还没有公钥）';
+  $('ssh-fingerprint').textContent = data.fingerprint || '-';
+  $('btn-copy-ssh').disabled = !publicKey;
+  $('btn-ssh-keygen').disabled = hasEd || !!state.ssh.busy;
+  $('btn-ssh-keygen').textContent = hasEd ? '已存在，不会覆盖' : '生成 ed25519 密钥';
+  $('ssh-keygen-hint').textContent = hasEd
+    ? '~/.ssh/id_ed25519 已存在，后台不会覆盖；直接复制上面的公钥去 GitHub 添加即可。'
+    : '后台生成时使用空口令：非交互 git 推送依赖 BatchMode，带口令会要求 ssh-agent。';
+  $('ssh-copy-hint').textContent = publicKey
+    ? '复制后打开 https://github.com/settings/keys → New SSH key → 粘贴保存。'
+    : '生成密钥后，这里会出现可复制的公钥。';
+  $('ssh-command').textContent = data.testCommand || 'ssh -T git@github.com';
+}
+
+async function loadSsh() {
+  try {
+    const data = await api('/ssh');
+    renderSsh(data);
+  } catch (err) {
+    if (err.status !== 401) {
+      toast('读取 SSH 状态失败：' + err.message, 'error');
+      $('ssh-summary').textContent = '读取失败';
+      $('ssh-note').textContent = err.message;
+    }
+  }
+}
+
+async function keygenSsh() {
+  if (state.ssh.busy) return;
+  state.ssh.busy = true;
+  const btn = $('btn-ssh-keygen');
+  btn.disabled = true;
+  btn.textContent = '正在生成…';
+  $('ssh-keygen-hint').textContent = '正在执行 ssh-keygen，请稍等。';
+  try {
+    const data = await api('/ssh/keygen', { method: 'POST', csrf: true, body: {} });
+    toast('已生成 ed25519 密钥', 'ok');
+    $('ssh-copy-hint').textContent = '公钥已生成，复制后到 GitHub 添加。';
+    await loadSsh();
+    if (data.publicKey) copyText(data.publicKey);
+  } catch (err) {
+    $('ssh-keygen-hint').textContent = err.message;
+    toast('生成失败：' + err.message, 'error');
+  } finally {
+    state.ssh.busy = false;
+    btn.disabled = false;
+    if ($('btn-ssh-keygen').textContent === '正在生成…') $('btn-ssh-keygen').textContent = '生成 ed25519 密钥';
+  }
+}
+
+async function testSsh() {
+  if (state.ssh.busy) return;
+  state.ssh.busy = true;
+  const btn = $('btn-ssh-test');
+  const box = $('ssh-test-result');
+  btn.disabled = true;
+  btn.textContent = '正在测试…';
+  box.hidden = false;
+  box.className = 'restore-result';
+  box.textContent = '正在执行 ssh -T git@github.com（最多 15 秒）…';
+  try {
+    const data = await api('/ssh/test', { method: 'POST', csrf: true, body: {} });
+    const lines = [
+      (data.ok ? '✓ ' : '✗ ') + (data.label || data.status || '未知结果'),
+      data.hint || '',
+      data.raw ? '原始输出：\n' + data.raw : ''
+    ].filter(Boolean);
+    box.textContent = lines.join('\n');
+    box.className = 'restore-result ' + (data.ok ? 'is-ok' : 'is-warn');
+    toast(data.ok ? 'SSH 认证成功' : (data.label || 'SSH 测试未通过'), data.ok ? 'ok' : 'error');
+  } catch (err) {
+    box.textContent = '✗ 测试失败：' + err.message;
+    box.className = 'restore-result is-warn';
+    toast('测试失败：' + err.message, 'error');
+  } finally {
+    state.ssh.busy = false;
+    btn.disabled = false;
+    btn.textContent = '测试连接';
+  }
+}
+
 async function loadPublish() {
   let deploy = null;
   try {
@@ -1644,6 +1904,33 @@ function bind() {
     loadSource(true);
   });
   $('btn-source-restore').addEventListener('click', restoreSource);
+
+  // 一键打包
+  $('btn-package').addEventListener('click', runPackage);
+  $('package-result').addEventListener('click', function (event) {
+    const btn = event.target.closest('[data-copy]');
+    if (!btn) return;
+    copyText(btn.dataset.copy).then(function (ok) {
+      toast(ok ? '包路径已复制' : '复制失败，请手动选择路径', ok ? 'ok' : 'error');
+    });
+  });
+
+  // SSH 面板
+  $('btn-ssh-keygen').addEventListener('click', keygenSsh);
+  $('btn-ssh-test').addEventListener('click', testSsh);
+  $('btn-copy-ssh').addEventListener('click', function () {
+    const publicKey = state.ssh.info && state.ssh.info.publicKey;
+    if (!publicKey) return toast('还没有可复制的公钥', 'error');
+    copyText(publicKey).then(function (ok) {
+      toast(ok ? '公钥已复制' : '复制失败，请手动选择公钥文本', ok ? 'ok' : 'error');
+    });
+  });
+  $('btn-copy-ssh-command').addEventListener('click', function () {
+    const command = ($('ssh-command').textContent || 'ssh -T git@github.com').trim();
+    copyText(command).then(function (ok) {
+      toast(ok ? '测试命令已复制' : '复制失败，请手动选择命令', ok ? 'ok' : 'error');
+    });
+  });
 
   // 弹窗
   $('modal-ok').addEventListener('click', function () { closeModal(true); });

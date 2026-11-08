@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
 <title>站点控制台</title>
-<link rel="stylesheet" href="style.css?v=20261108k">
-<script src="app.js?v=20261108k" defer></script>
+<link rel="stylesheet" href="style.css?v=20261108n">
+<script src="app.js?v=20261108n" defer></script>
 </head>
 <body>
 <div class="grain" aria-hidden="true"></div>
@@ -97,6 +97,14 @@
       <button class="nav-item" data-view="source" type="button">
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 6h4.5a5 5 0 0 1 0 10H8.5"/></svg>
         <span>源码</span>
+      </button>
+      <button class="nav-item" data-view="package" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 8v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8"/><path d="m3 8 9-5 9 5"/><path d="M3 8h18"/><path d="m12 3v17"/></svg>
+        <span>打包</span>
+      </button>
+      <button class="nav-item" data-view="ssh" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="12" r="4"/><path d="M12 12h9"/><path d="M17 12v3"/><path d="M20 12v2"/></svg>
+        <span>SSH 密钥</span>
       </button>
       <button class="nav-item" data-view="publish" type="button">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg>
@@ -325,6 +333,105 @@
       <div class="panel">
         <h3>执行日志</h3>
         <pre id="source-log" class="log">还没有执行记录。</pre>
+      </div>
+    </section>
+
+    <!-- 一键打包 -->
+    <section id="view-package" class="view" hidden>
+      <div class="target-card">
+        <div>
+          <p class="eyebrow">Portable package</p>
+          <h2>一键打包源码</h2>
+          <p class="muted">把前端与后台源码打成可直接迁移的 zip，输出到 <code>backup/package/</code>。包里不含任何真实凭据。</p>
+        </div>
+        <span id="package-state" class="badge">待打包</span>
+      </div>
+
+      <div class="publish-grid">
+        <div class="panel">
+          <h3>选择打包模式</h3>
+          <div id="package-modes" class="pkg-modes" role="radiogroup" aria-label="打包模式"></div>
+          <button id="btn-package" class="btn btn-primary" type="button">开始打包</button>
+          <p id="package-hint" class="hint">打包时会复制并压缩项目文件，请稍等；期间不要关闭后台。</p>
+        </div>
+        <div class="panel">
+          <h3>本次结果</h3>
+          <div id="package-result" class="pkg-result" hidden></div>
+          <div id="package-empty" class="empty small">
+            <p>还没有生成本次打包。</p>
+            <span>选择模式后点「开始打包」。</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3>上次生成</h3>
+        <div id="package-last" class="pkg-last muted">读取中…</div>
+        <p class="hint">
+          产物目录固定为 <code>backup/package/</code>（已加入 .gitignore）。浏览器不能直接打开资源管理器，
+          请复制路径后在文件夹地址栏粘贴；Windows 也可以按 <code>Win</code> + <code>E</code> 打开资源管理器。
+        </p>
+      </div>
+
+      <div class="panel">
+        <h3>新手部署到自己的 GitHub</h3>
+        <ol class="guide-list">
+          <li>在 GitHub 新建一个<strong>空仓库</strong>：不要勾选 README、.gitignore 或 License。</li>
+          <li>把两条推送目标改成你自己的仓库：<code>源码</code> 页的仓库（<code>source</code> 分支），以及 <code>生成与推送</code> 页的仓库（<code>main</code> 分支）。</li>
+          <li>回到后台点「推源码」提交并推送；需要发布页面时再点「生成并推送」。</li>
+          <li>如果仓库根目录有 <code>vercel.json</code>：在 Vercel 里 New Project → Import Git Repository，选中这个仓库，构建配置按 <code>vercel.json</code> 执行；之后每次推送到 <code>main</code> 都会自动部署。</li>
+        </ol>
+        <p class="hint">SSH 公钥还没配置？先到「SSH 密钥」页生成并复制公钥，再继续。</p>
+      </div>
+    </section>
+
+    <!-- SSH 快捷指令 -->
+    <section id="view-ssh" class="view" hidden>
+      <div class="target-card">
+        <div>
+          <p class="eyebrow">SSH keys</p>
+          <h2 id="ssh-summary">读取中…</h2>
+          <p id="ssh-note" class="muted"></p>
+        </div>
+        <span id="ssh-state" class="badge">读取中</span>
+      </div>
+
+      <div class="ssh-steps">
+        <div class="panel ssh-step">
+          <p class="step-num">01</p>
+          <h3>生成密钥</h3>
+          <p class="muted">生成 <code>~/.ssh/id_ed25519</code>。目标文件已存在时会拒绝，不会覆盖。</p>
+          <div id="ssh-exists" class="ssh-kv"></div>
+          <button id="btn-ssh-keygen" class="btn btn-primary" type="button">生成 ed25519 密钥</button>
+          <p id="ssh-keygen-hint" class="hint">后台生成时使用空口令：非交互 git 推送依赖 BatchMode，带口令会要求 ssh-agent。</p>
+        </div>
+
+        <div class="panel ssh-step">
+          <p class="step-num">02</p>
+          <h3>复制公钥到 GitHub</h3>
+          <p class="muted">
+            打开 <a href="https://github.com/settings/keys" target="_blank" rel="noreferrer">github.com/settings/keys</a>
+            → New SSH key → 粘贴下面的公钥。
+          </p>
+          <div class="copy-row">
+            <span id="ssh-fingerprint" class="fingerprint">-</span>
+            <button id="btn-copy-ssh" class="ghost-btn" type="button">复制公钥</button>
+          </div>
+          <pre id="ssh-public" class="ssh-public">（还没有公钥）</pre>
+          <p id="ssh-copy-hint" class="hint"></p>
+        </div>
+
+        <div class="panel ssh-step">
+          <p class="step-num">03</p>
+          <h3>测试连接</h3>
+          <p class="muted">执行 <code>ssh -T git@github.com</code>（BatchMode=yes、15 秒超时）。GitHub 认证成功时退出码也是 1，所以这里按输出分类。</p>
+          <div class="copy-row">
+            <code id="ssh-command">ssh -T git@github.com</code>
+            <button id="btn-copy-ssh-command" class="ghost-btn" type="button">复制命令</button>
+          </div>
+          <button id="btn-ssh-test" class="btn" type="button">测试连接</button>
+          <div id="ssh-test-result" class="restore-result" hidden></div>
+        </div>
       </div>
     </section>
 
