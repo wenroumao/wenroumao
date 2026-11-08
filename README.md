@@ -1261,7 +1261,103 @@ npx hexo clean && npx hexo generate && npx gulp
 
 ---
 
-## 十三、常见问题
+## 十三、本地后台（写作与发布）
+
+后台随 `hexo server` 一起启动，只允许本机访问，不进入 `public/`，也不会随站点发布。
+
+### 启动
+
+Windows 一键启动：
+
+```bat
+.\start-admin.cmd
+```
+
+打开 <http://localhost:4000/admin/>，登录后即可：文章列表 / 新建 / 编辑 / 删除、站点与主题白名单配置、生成站点、手动推送。
+
+也可以自己设环境变量后运行：
+
+```powershell
+$env:ADMIN_USER="admin"
+$env:ADMIN_PASSWORD="换成你的密码"
+npm run server
+```
+
+或把下面两行写进站点根目录的 `.admin-auth`（已 gitignore）：
+
+```text
+ADMIN_USER=admin
+ADMIN_PASSWORD=换成你的密码
+```
+
+`start-admin.cmd` 双击运行即可：首次会提示输入账号密码，可选择写入 `.admin-auth` 以便下次免输入。如果 4000 端口已被占用（比如之前开着的服务没关），脚本会列出占用进程并停下等你确认，不会静默失败。
+
+### 停止
+
+Windows 一键停止（关闭本地后台与站点预览）：
+
+```bat
+.\stop-admin.cmd
+```
+
+双击后会先按端口找到监听 4000 的 PID，再校验这个进程确实是本项目的后台：进程名是 `node`，且命令行里同时包含 `hexo` 与本项目路径；命令行看不出项目时，再请求 `http://127.0.0.1:4000/admin/api/session` 确认返回里含 `configured`。三项都对上才会结束进程，不会按进程名批量杀 node。若 4000 被其它程序占用，只列出 PID 与命令行、不做任何结束操作；服务本来就没在运行时，直接提示「当前没有在运行的本地后台服务（4000 端口未监听）」。
+
+> 这几个 `.cmd` 必须保持 CRLF 换行；`start-admin.cmd` 与 `stop-admin.cmd` 使用 GBK 编码（`chcp 936`）。用编辑器改成 LF 或 UTF-8 后，`cmd.exe` 会把 `set /p` 那几行解析错，账号密码传不进 Node，页面就会一直停在「还没有配置管理员账号」，停止脚本的中文提示也会变成乱码。
+
+### 环境变量
+
+| 变量 | 作用 |
+| --- | --- |
+| `ADMIN_USER` / `ADMIN_PASSWORD` | 管理员账号密码，必填（或使用 `.admin-auth`） |
+| `ADMIN_AUTO_GENERATE` | 设为 `0` 可关闭“保存后自动生成”，默认开启 |
+| `ADMIN_DEPLOY_REPO` / `ADMIN_DEPLOY_BRANCH` | 覆盖部署仓库地址 / 分支 |
+| `ADMIN_DEPLOY_ENABLED` | 设为 `1` 才允许推送（也可以在界面里勾选） |
+| `ADMIN_ALLOW_LAN` | 设为 `1` 才允许局域网访问，默认只允许本机 |
+
+### 保存与发布
+
+- 保存文章或配置后会自动执行 `hexo generate`，本地预览立即更新；生成状态显示在右上角和「生成与推送」页。
+- 编辑前会把原文件备份到 `bak/admin/<时间戳>/`（`bak/` 已 gitignore）。
+- 推送是独立动作：先重新生成，再把 `public/` 推到你配置的部署仓库和分支。**不会自动推送**，也不会使用 `_config.yml` 里的占位 deploy 配置。
+- 部署配置写在 `.admin-deploy.json`（已 gitignore），也可以在「生成与推送 → 推送设置」里改：
+
+```json
+{
+  "repo": "git@github.com:wenroumao/wenroumao.git",
+  "branch": "main",
+  "enabled": true
+}
+```
+
+推送前会校验：仓库地址不是主题上游、不是当前源码仓库的 remote；`git ls-remote` 能连通；目标分支是否存在。失败会直接显示原因。SSH 地址需要本机已配置并添加 GitHub SSH Key。
+
+### 界面与编辑体验
+
+- **文章列表**：即时搜索（标题 / 文件名 / 摘要 / 分类 / 标签），「全部 / 已发布 / 草稿」筛选，右侧显示当前命中数。
+- **草稿**：勾选「保存为草稿」会写入 front matter `published: false`（不会新建 `_drafts/` 目录）。列表里带「草稿」徽标，可筛选；取消勾选保存即恢复发布。
+- **快捷删除**：列表每行有「删除」，点击弹出中文二次确认；确认后删除、备份到 `bak/admin/` 并自动重新生成，成功/失败都有提示。
+- **编辑页**：编辑 / 分屏 / 预览三档；`Ctrl+S`（macOS 为 `Cmd+S`）保存；有未保存改动时返回列表或关闭页面都会提示。
+- **实时预览**：分屏右侧直接内嵌一个 `/admin/preview` 页面，它引用站点自己的 `public/css/index.css`，正文容器结构与主题 `layout/post.pug` 相同（`#content-inner > #post > article#article-container.post-content`），代码块复用 Hexo 的 `backtick_code_block`，所以字体、配色、代码高亮与前台文章页一致。编辑区与预览区支持双向滚动同步。
+
+预览的边界：
+
+- Butterfly 外挂标签（`{% note %}`、`{% tabs %}`、`{% gallery %}` 等）不会在预览里求值，会显示成原始文本；前台仍由标签插件正常渲染。
+- 预览用的是**已生成**的 `public/css/index.css`，改了主题样式要重新生成后预览才会跟着变。
+- 预览只覆盖正文，不含头图、目录、版权、上下篇等外围模块。
+
+后台没有引入任何第三方编辑器或新依赖。完整的所见即所得需要接入 Vditor / ProseMirror 一类编辑器并调整存储格式，属于较大改造，当前用「Markdown + 同款站点样式预览」这个折中。
+
+### 测试
+
+```bash
+npm run test:admin
+```
+
+当前 13 个测试覆盖：front matter 补丁、YAML 路径读写、路径穿越、部署仓库守卫、会话与 CSRF、登录限流、保存后自动生成、配置白名单、推送预检、预览需登录且需 CSRF、预览页可同源嵌入而主页不可、草稿状态写入与恢复。
+
+---
+
+## 十四、常见问题
 
 **Q：执行 `hexo server` 报找不到主题？**
 确认 `_config.yml` 里的 `theme:` 值与 `themes/` 下的目录名一致（默认 `fomalhaut`）。
