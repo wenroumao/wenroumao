@@ -1,16 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom">
-  <title>Demo</title>
+  <title>wenroumao</title>
   
   
-  <link href="https://example.com/atom.xml" rel="self"/>
+  <link href="https://wenroumao.cn/atom.xml" rel="self"/>
   
-  <link href="https://example.com/"/>
+  <link href="https://wenroumao.cn/"/>
   <updated>2026-10-02T02:00:00.000Z</updated>
-  <id>https://example.com/</id>
+  <id>https://wenroumao.cn/</id>
   
   <author>
-    <name>Demo</name>
+    <name>wenroumao</name>
     
   </author>
   
@@ -18,8 +18,8 @@
   
   <entry>
     <title>外挂标签速查</title>
-    <link href="https://example.com/posts/56032921.html"/>
-    <id>https://example.com/posts/56032921.html</id>
+    <link href="https://wenroumao.cn/posts/56032921.html"/>
+    <id>https://wenroumao.cn/posts/56032921.html</id>
     <published>2026-10-02T02:00:00.000Z</published>
     <updated>2026-10-02T02:00:00.000Z</updated>
     
@@ -30,14 +30,14 @@
     
     
     
-    <category term="开始使用" scheme="https://example.com/categories/%E5%BC%80%E5%A7%8B%E4%BD%BF%E7%94%A8/"/>
+    <category term="开始使用" scheme="https://wenroumao.cn/categories/%E5%BC%80%E5%A7%8B%E4%BD%BF%E7%94%A8/"/>
     
     
-    <category term="Hexo" scheme="https://example.com/tags/Hexo/"/>
+    <category term="Hexo" scheme="https://wenroumao.cn/tags/Hexo/"/>
     
-    <category term="Fomalhaut" scheme="https://example.com/tags/Fomalhaut/"/>
+    <category term="Fomalhaut" scheme="https://wenroumao.cn/tags/Fomalhaut/"/>
     
-    <category term="标签" scheme="https://example.com/tags/%E6%A0%87%E7%AD%BE/"/>
+    <category term="标签" scheme="https://wenroumao.cn/tags/%E6%A0%87%E7%AD%BE/"/>
     
   </entry>
   
