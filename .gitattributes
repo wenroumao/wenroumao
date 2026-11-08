@@ -1,0 +1,3 @@
+# cmd.exe 只认 CRLF；换行被转成 LF 后 set /p 会解析失败，账号密码传不进 Node
+*.cmd text eol=crlf
+*.bat text eol=crlf
