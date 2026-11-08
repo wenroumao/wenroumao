@@ -19,6 +19,7 @@ const source = require('./source');
 const packager = require('./package');
 const ssh = require('./ssh');
 const oss = require('./oss');
+const importer = require('./importer');
 
 const COOKIE_NAME = 'fomalhaut_admin';
 const UI_DIR = path.join(__dirname, 'ui');
@@ -196,6 +197,19 @@ function createAdminServer(options) {
         label: (err && err.label) || '图床错误',
         message: (err && err.message) || 'OSS 操作失败。',
         hint: (err && err.hint) || ''
+      }
+    });
+  }
+
+  /** 导入失败：保留 importer 的错误码与人话提示。 */
+  function sendImportFailure(res, err) {
+    const code = (err && err.code) || 'IMPORT_FAILED';
+    const status = (err && err.status) || 502;
+    sendJson(res, status, {
+      ok: false,
+      error: {
+        code: code,
+        message: (err && err.message) || '导入失败。'
       }
     });
   }
@@ -802,6 +816,20 @@ function createAdminServer(options) {
       }).catch(function (err) {
         return fail(res, 400, (err && err.message) || '预览渲染失败。');
       });
+    }
+
+    if (apiPath === '/import/md' && method === 'POST') {
+      return readBody(req, importer.MAX_MD_BYTES + 64 * 1024).then(function (body) {
+        sendJson(res, 200, importer.parseMarkdown(body.text));
+      }).catch(function (err) { sendImportFailure(res, err); });
+    }
+
+    if (apiPath === '/import/url' && method === 'POST') {
+      return readBody(req, 16 * 1024).then(function (body) {
+        return importer.convertUrl(body.url, opts.importOptions);
+      }).then(function (result) {
+        sendJson(res, 200, result);
+      }).catch(function (err) { sendImportFailure(res, err); });
     }
 
     if (apiPath === '/config' && method === 'PUT') {

@@ -19,6 +19,7 @@ const packager = require('../admin/package.js');
 const ssh = require('../admin/ssh.js');
 const oss = require('../admin/oss.js');
 const source = require('../admin/source.js');
+const importer = require('../admin/importer.js');
 const crypto = require('crypto');
 
 const CONFIG_SITE = [
@@ -2075,6 +2076,169 @@ test('图床资源管理器：未配置时列表/删除返回 OSS_NOT_CONFIGURED
     });
     assert.equal(del.status, 400);
     assert.equal(del.json.error.code, 'OSS_NOT_CONFIGURED');
+  } finally {
+    await srv.close();
+    cleanup(dir);
+  }
+});
+
+/* ------------------------------------------------------- Markdown 导入（一期） */
+
+test('本地 .md 解析：BOM 剥离、front matter 字段保留、大小限制', function () {
+  const raw = '\uFEFF---\ntitle: 导入的标题\ndate: 2026-01-02 09:00:00\ncategories:\n  - 随笔\n  - 笔记\ntags: [甲, 乙]\ncover: /img/c.png\nexcerpt: 摘要文字\ncomments: false\ndraft: true\n---\n\n正文第一段\n';
+  const parsed = importer.parseMarkdown(raw);
+  assert.equal(parsed.hasFrontMatter, true);
+  assert.equal(parsed.title, '导入的标题');
+  assert.equal(parsed.date, '2026-01-02 09:00:00');
+  assert.deepEqual(parsed.categories, ['随笔', '笔记']);
+  assert.deepEqual(parsed.tags, ['甲', '乙']);
+  assert.equal(parsed.cover, '/img/c.png');
+  assert.equal(parsed.description, '摘要文字');
+  assert.equal(parsed.comments, false);
+  assert.equal(parsed.published, false);
+  assert.equal(parsed.body, '正文第一段\n');
+  assert.deepEqual(parsed.warnings, []);
+
+  const noFront = importer.parseMarkdown('\uFEFF只有正文\n');
+  assert.equal(noFront.hasFrontMatter, false);
+  assert.equal(noFront.body, '只有正文\n');
+  assert.match(noFront.warnings.join(), /没有 front matter/);
+
+  assert.throws(function () { importer.parseMarkdown('   '); }, /空的/);
+  const big = 'a'.repeat(importer.MAX_MD_BYTES + 1);
+  assert.throws(function () { importer.parseMarkdown(big); }, function (err) {
+    return err.code === 'IMPORT_MD_TOO_LARGE';
+  });
+});
+
+test('SSRF 防护：内网 IP、localhost、解析到内网的域名一律拦截', async function () {
+  const blocked = ['127.0.0.1', '10.1.2.3', '172.20.0.1', '192.168.0.1',
+    '169.254.1.1', '0.0.0.0', '::1', '[::1]', '::ffff:127.0.0.1', '100.64.0.1'];
+  for (let i = 0; i < blocked.length; i++) {
+    await assert.rejects(
+      importer.assertPublicHost(blocked[i]),
+      function (err) { return err.code === 'IMPORT_BLOCKED_PRIVATE'; },
+      blocked[i] + ' 应该被拦截'
+    );
+  }
+  await assert.rejects(
+    importer.assertPublicHost('localhost'),
+    function (err) { return err.code === 'IMPORT_BLOCKED_PRIVATE'; }
+  );
+
+  const lookup = async function () { return [{ address: '10.0.0.8', family: 4 }]; };
+  await assert.rejects(
+    importer.assertPublicHost('evil.example.com', lookup),
+    function (err) { return err.code === 'IMPORT_BLOCKED_PRIVATE'; }
+  );
+
+  const publicLookup = async function () { return [{ address: '93.184.216.34', family: 4 }]; };
+  const ok = await importer.assertPublicHost('example.com', publicLookup);
+  assert.equal(ok[0].address, '93.184.216.34');
+
+  assert.throws(function () { importer.normalizeUrl('ftp://example.com/a'); }, /只允许 http/);
+  assert.throws(function () { importer.normalizeUrl('not a url'); }, /格式不正确/);
+});
+
+test('网页抓取：15 秒超时按 IMPORT_TIMEOUT 结束', async function () {
+  const lookup = async function () { return [{ address: '93.184.216.34', family: 4 }]; };
+  const fakeRequest = function () {
+    return { on: function () {}, end: function () {}, destroy: function () {} };
+  };
+  await assert.rejects(
+    importer.fetchPage('https://example.com/post', { lookup: lookup, request: fakeRequest, timeoutMs: 60 }),
+    function (err) { return err.code === 'IMPORT_TIMEOUT'; }
+  );
+});
+
+test('HTML → Markdown：标题/段落/强调/代码/列表/引用/表格/图片/链接/分隔线', function () {
+  const html = [
+    '<html><head><title>文章标题 - 某站点</title>',
+    '<meta property="og:title" content="OG 标题"></head>',
+    '<body>',
+    '<nav class="site-nav"><a href="/">首页</a></nav>',
+    '<article class="post-content">',
+    '<h1>第一章</h1>',
+    '<p>普通段落，含 <strong>粗体</strong> 与 <em>斜体</em> 和 <code>inline()</code>。</p>',
+    '<h3>小节</h3>',
+    '<ul><li>甲</li><li>乙<ul><li>乙-1</li></ul></li></ul>',
+    '<ol start="3"><li>第三</li><li>第四</li></ol>',
+    '<blockquote>引用第一行<br>引用第二行</blockquote>',
+    '<pre><code class="language-js">const x = 1;\nif (x) { console.log(x); }</code></pre>',
+    '<table><thead><tr><th>名称</th><th>值</th></tr></thead>',
+    '<tbody><tr><td>a</td><td>1</td></tr><tr><td>b</td><td>2</td></tr></tbody></table>',
+    '<img src="/img/pic.png" alt="示意图">',
+    '<p><a href="/other/post">站内链接</a></p>',
+    '<hr>',
+    '</article>',
+    '<footer><p>版权页脚</p></footer>',
+    '<script>var a = 1;</script>',
+    '</body></html>'
+  ].join('\n');
+
+  const result = importer.htmlToMarkdown(html, 'https://example.com/post/1');
+  assert.equal(result.title, 'OG 标题');
+  const md = result.markdown;
+
+  assert.match(md, /^# 第一章/m);
+  assert.match(md, /### 小节/);
+  assert.match(md, /\*\*粗体\*\*/);
+  assert.match(md, /\*斜体\*/);
+  assert.match(md, /`inline\(\)`/);
+  assert.match(md, /- 甲/);
+  assert.match(md, /  - 乙-1/);
+  assert.match(md, /3\. 第三/);
+  assert.match(md, /> 引用第一行/);
+  assert.match(md, /```js\nconst x = 1;/);
+  assert.match(md, /\| 名称 \| 值 \|/);
+  assert.match(md, /\| a \| 1 \|/);
+  assert.match(md, /!\[示意图\]\(https:\/\/example\.com\/img\/pic\.png\)/);
+  assert.match(md, /\[站内链接\]\(https:\/\/example\.com\/other\/post\)/);
+  assert.match(md, /\n---($|\n)/);
+  assert.doesNotMatch(md, /首页/);
+  assert.doesNotMatch(md, /版权页脚/);
+  assert.doesNotMatch(md, /var a = 1/);
+  assert.equal(result.charCount, md.length);
+  assert.deepEqual(result.warnings, []);
+});
+
+test('HTML → Markdown：内容过少时提示可能需要 JS 渲染', function () {
+  const html = '<html><head><title>SPA</title></head><body><div id="app"></div>' +
+    '<script src="/app.js"></script></body></html>';
+  const result = importer.htmlToMarkdown(html, 'https://example.com/');
+  assert.equal(result.markdown, '');
+  assert.match(result.warnings.join(), /可能需要 JS 渲染/);
+});
+
+test('导入接口：缺 CSRF 被拒，内网地址被拦，.md 导入可用', async function () {
+  const dir = makeFixture();
+  const srv = await startServer(dir);
+  try {
+    const auth = await login(srv.base);
+
+    const noCsrf = await call(srv.base, '/admin/api/import/md', {
+      method: 'POST', cookie: auth.cookie, body: { text: '# x' }
+    });
+    assert.equal(noCsrf.status, 403);
+
+    const noAuth = await call(srv.base, '/admin/api/import/md', { method: 'POST', body: { text: '# x' } });
+    assert.equal(noAuth.status, 401);
+
+    const ssrf = await call(srv.base, '/admin/api/import/url', {
+      method: 'POST', cookie: auth.cookie, csrf: auth.csrf,
+      body: { url: 'http://127.0.0.1:8080/' }
+    });
+    assert.equal(ssrf.status, 403);
+    assert.equal(ssrf.json.error.code, 'IMPORT_BLOCKED_PRIVATE');
+
+    const md = await call(srv.base, '/admin/api/import/md', {
+      method: 'POST', cookie: auth.cookie, csrf: auth.csrf,
+      body: { text: '\uFEFF---\ntitle: 导入标题\ntags:\n  - 导入\n---\n\n正文\n' }
+    });
+    assert.equal(md.status, 200);
+    assert.equal(md.json.title, '导入标题');
+    assert.deepEqual(md.json.tags, ['导入']);
+    assert.equal(md.json.rawBody === undefined, true);
   } finally {
     await srv.close();
     cleanup(dir);
