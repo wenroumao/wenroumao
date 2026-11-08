@@ -12,7 +12,8 @@
     "clean": "hexo clean",
     "deploy": "hexo deploy",
     "deploy:vercel": "node tools/deploy-vercel.js",
-    "server": "hexo server"
+    "server": "hexo server",
+    "test:admin": "node --test tools/tests/admin.test.cjs"
   },
   "hexo": {
     "version": "6.3.0"
