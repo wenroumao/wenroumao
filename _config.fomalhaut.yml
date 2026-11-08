@@ -46,21 +46,21 @@ copy:
 social:
   # 格式： 名称: 链接 || 图标类名 || 动画类名
   Github: https://github.com/wenroumao || icon-github || faa-tada
-  B站: https://space.bilibili.com/12345678 || icon-bilibili || faa-tada
-  邮箱: mailto:you@example.com || icon-youxiang || faa-tada
+  B站: https://space.bilibili.com/397547279 || icon-bilibili || faa-tada
+  邮箱: mailto:m13028252518@163.com || icon-youxiang || faa-tada
   # 微信: /assets/wechat-qr.webp || icon-weixin || faa-tada
   # RSS: /atom.xml || icon-RSS || faa-tada
 
   # 用 iconfont 图标的写法：
-  # iconfont icon-github: https://github.com/yourname || Github
-  # iconfont icon-youjian: mailto:you@example.com || 邮箱
+  # iconfont icon-github: https://github.com/wenroumao || Github
+  # iconfont icon-youjian: mailto:m13028252518@163.com || 邮箱
 
-  # iconfont icon-github: https://github.com/yourname || Github
-  # iconfont icon-youjian: mailto:you@example.com || 邮箱
-  # iconfont icon-tv: https://space.bilibili.com/12345678 || B站
-  # iconfont icon-leetcode: https://leetcode.cn/u/yourname/ || 力扣
+  # iconfont icon-github: https://github.com/wenroumao || Github
+  # iconfont icon-youjian: mailto:m13028252518@163.com || 邮箱
+  # iconfont icon-tv: https://space.bilibili.com/397547279 || B站
+  # iconfont icon-leetcode: https://leetcode.cn/u/wenroumao/ || 力扣
   # iconfont icon-weibo: https://weibo.com/u/0000000000 || 微博
-  # iconfont icon-shejiaotubiao-46: https://www.zhihu.com/people/yourname || 知乎
+  # iconfont icon-shejiaotubiao-46: https://www.zhihu.com/people/wenroumao || 知乎
 
 # search (搜索)
 # see https://butterfly.js.org/posts/ceeb73f/#搜索系統
@@ -551,7 +551,7 @@ comments:
 # disqus
 # https://disqus.com/
 disqus:
-  # yourname
+  # wenroumao
   shortname:
   apikey: # For newest comments widget
 
