@@ -861,16 +861,62 @@ function createAdminServer(options) {
     if (apiPath === '/source' && isRead) {
       try {
         source.assertRepo(baseDir);
-        return sendJson(res, 200, source.describe(baseDir, {
+        const payload = source.describe(baseDir, {
           repo: sourceOptions.repo,
           branch: sourceOptions.branch,
           changes: parsed.searchParams.get('changes') !== '0',
           limit: parsed.searchParams.get('limit'),
           offset: parsed.searchParams.get('offset')
-        }));
+        });
+        // 恢复弹窗需要先展示目标 SHA；只有显式要 remote=1 时才联网查询。
+        if (parsed.searchParams.get('remote') === '1') {
+          try {
+            payload.remote = {
+              ok: true,
+              sha: source.remoteBranchSha(baseDir, payload.repo, payload.branch) || ''
+            };
+          } catch (err) {
+            payload.remote = { ok: false, sha: '', error: err.message };
+          }
+        }
+        return sendJson(res, 200, payload);
       } catch (err) {
         return fail(res, err.code === 'SOURCE_NOT_REPO' ? 400 : 500, err.message);
       }
+    }
+
+    // 从远端 source 覆盖本地：破坏性操作，先备份再 fetch + reset --hard。
+    if (apiPath === '/source/restore' && method === 'POST') {
+      if (sourceBusy) return fail(res, 409, '上一次源码操作还没结束，等它完成再试。');
+      return readBody(req, 16 * 1024).then(function () {
+        sourceBusy = true;
+        return source.restoreFromRemote(baseDir, {
+          repo: sourceOptions.repo,
+          branch: sourceOptions.branch,
+          log: function () { /* 日志由返回值带回 */ },
+          runGenerate: function (task) { return runGenerate(task); }
+        }).then(function (result) {
+          sendJson(res, 200, {
+            ok: true, restored: true,
+            fromSha: result.fromSha, toSha: result.toSha, shortTo: result.shortTo,
+            backup: result.backup, retained: result.retained,
+            dependencyWarning: result.dependencyWarning, generate: result.generate,
+            log: result.log
+          });
+        }).catch(function (err) {
+          const code = err && err.code ? err.code : 'SOURCE_RESTORE_FAILED';
+          const status = code === 'SOURCE_NOT_REPO' || code === 'SOURCE_BACKUP_FAILED' ? 500 : 502;
+          sendJson(res, status, {
+            ok: false,
+            error: { code: code, message: (err && err.message) || '恢复失败。' },
+            restored: false,
+            backup: (err && err.backup) || null,
+            fromSha: (err && err.fromSha) || '',
+            log: (err && err.log) || '',
+            raw: (err && err.raw) || ''
+          });
+        }).then(function () { sourceBusy = false; });
+      }).catch(function (err) { fail(res, 400, err.message); });
     }
 
     if (apiPath === '/source/commit' && method === 'POST') {
@@ -949,17 +995,27 @@ function createHexoRunner(baseDir) {
       const bin = path.join(baseDir, 'node_modules', 'hexo', 'bin', 'hexo');
       if (!fs.existsSync(bin)) return reject(new Error('找不到 hexo：' + bin));
       task.log('\n$ hexo generate\n');
+      let tail = '';
+      function collect(chunk) {
+        const text = String(chunk);
+        task.log(text);
+        // 只留最后一小段，失败时把原始报错带回前端，避免只看到一个退出码。
+        tail = (tail + text).slice(-2000);
+      }
       const child = spawn(process.execPath, [bin, 'generate'], {
         cwd: baseDir,
         env: process.env,
         windowsHide: true
       });
-      child.stdout.on('data', function (chunk) { task.log(String(chunk)); });
-      child.stderr.on('data', function (chunk) { task.log(String(chunk)); });
-      child.on('error', reject);
+      child.stdout.on('data', collect);
+      child.stderr.on('data', collect);
+      child.on('error', function (err) {
+        reject(new Error('hexo generate 启动失败：' + err.message));
+      });
       child.on('close', function (code) {
-        if (code === 0) resolve();
-        else reject(new Error('hexo generate 退出码 ' + code));
+        if (code === 0) return resolve();
+        const detail = tail.trim();
+        reject(new Error('hexo generate 退出码 ' + code + (detail ? '\n' + detail : '')));
       });
     });
   };

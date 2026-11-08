@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
 <title>站点控制台</title>
-<link rel="stylesheet" href="style.css?v=20261108i">
-<script src="app.js?v=20261108i" defer></script>
+<link rel="stylesheet" href="style.css?v=20261108k">
+<script src="app.js?v=20261108k" defer></script>
 </head>
 <body>
 <div class="grain" aria-hidden="true"></div>
@@ -307,6 +307,19 @@
           <p>还没有提交记录。</p>
           <span>第一次提交之后，这里会一直往前翻到最早一条。</span>
         </div>
+      </div>
+
+      <div class="panel danger-zone">
+        <h3>从远端 source 恢复</h3>
+        <p class="muted">用 GitHub 上的源码覆盖本地。执行前会先把当前改动备份到 <code>bak/admin/restore/&lt;时间戳&gt;/</code>，备份失败就不覆盖。</p>
+        <div class="restore-meta">
+          <span>当前 HEAD <code id="source-restore-head">-</code></span>
+          <span>目标 <code id="source-restore-target">远端 source</code></span>
+          <span>只改本地分支指针，不影响远端</span>
+          <span>未跟踪文件保留，不执行 git clean</span>
+        </div>
+        <button id="btn-source-restore" class="btn btn-danger" type="button">用远端源码覆盖本地</button>
+        <div id="source-restore-result" class="restore-result" hidden></div>
       </div>
 
       <div class="panel">

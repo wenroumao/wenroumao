@@ -3,7 +3,9 @@ chcp 936 >nul
 setlocal
 cd /d "%~dp0"
 
-rem ï¿½ï¿½È·ï¿½ï¿½ 4000 ï¿½Ë¿ï¿½ï¿½Ç·ï¿½ï¿½Ñ±ï¿½Õ¼ï¿½Ã£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Â·ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½È´Ã»ï¿½ï¿½ï¿½ï¿½Ê¾
+rem ¶ÀÁ¢ºóÌ¨£º²»ÒÀÀµ hexo server£¬Ç°¶Ë¸Ä»µÊ±ÈÔÄÜÆô¶¯²¢×öÔ´Âë»Ö¸´¡£
+rem 4000 ¶Ë¿Ú¹Ì¶¨¸øºóÌ¨£¬Õ¾µãÔ¤ÀÀ¸Äµ½ 4001£¨¼û start-blog.cmd£©¡£
+
 netstat -ano | findstr ":4000" | findstr "LISTENING" >nul
 if not errorlevel 1 goto port_busy
 
@@ -11,46 +13,61 @@ if exist ".admin-auth" goto run
 if defined ADMIN_USER if defined ADMIN_PASSWORD goto run
 
 echo.
-echo [i] ï¿½×´ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Òªï¿½ï¿½ï¿½Ã¹ï¿½ï¿½ï¿½Ô±ï¿½ËºÅ£ï¿½ï¿½Ëºï¿½ï¿½ï¿½ï¿½ï¿½Ö»ï¿½ï¿½ï¿½Ú±ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ÐµÄ±ï¿½ï¿½Øºï¿½Ì¨
+echo [i] Ê×´ÎÆô¶¯ÐèÒªÉèÖÃ¹ÜÀíÔ±ÕËºÅ£¨ÕËºÅÃÜÂëÖ»±£´æÔÚ±¾»úµÄ±¾µØºóÌ¨£©
 set "ADMIN_USER="
-set /p "ADMIN_USER=ï¿½ï¿½ï¿½ï¿½Ô±ï¿½ËºÅ£ï¿½Ö±ï¿½Ó»Ø³ï¿½ï¿½ï¿½ admin: "
+set /p "ADMIN_USER=¹ÜÀíÔ±ÕËºÅ£¨Ö±½Ó»Ø³µÓÃ admin£©: "
 if not defined ADMIN_USER set "ADMIN_USER=admin"
 set "ADMIN_PASSWORD="
-set /p "ADMIN_PASSWORD=ï¿½ï¿½ï¿½ï¿½Ô±ï¿½ï¿½ï¿½ï¿½: "
+set /p "ADMIN_PASSWORD=¹ÜÀíÔ±ÃÜÂë: "
 if not defined ADMIN_PASSWORD (
-  echo [x] ï¿½ï¿½ï¿½ë²»ï¿½ï¿½Îªï¿½ï¿½
+  echo [x] ÃÜÂë²»ÄÜÎª¿Õ
   goto end_fail
 )
 
 set "SAVE_AUTH="
-set /p "SAVE_AUTH=ï¿½Ç·ñ±£´æµ½ .admin-authï¿½ï¿½ï¿½Â´ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ë£¬ï¿½ï¿½ï¿½Ä¼ï¿½ï¿½Ñ¼ï¿½ï¿½ï¿½ gitignore? [y/N]: "
+set /p "SAVE_AUTH=ÊÇ·ñ±£´æµ½ .admin-auth£¨ÏÂ´Î²»ÓÃÊäÈë£¬¸ÃÎÄ¼þÒÑ¼ÓÈë gitignore£©? [y/N]: "
 if /i "%SAVE_AUTH%"=="y" (
   > ".admin-auth" echo ADMIN_USER=%ADMIN_USER%
   >> ".admin-auth" echo ADMIN_PASSWORD=%ADMIN_PASSWORD%
-  echo [i] ï¿½ï¿½Ð´ï¿½ï¿½ .admin-auth
+  echo [i] ÒÑÐ´Èë .admin-auth
 )
 
 :run
 echo.
-echo [i] ï¿½ï¿½Ì¨ï¿½ï¿½Ö·: http://localhost:4000/admin/
-echo [i] Õ¾ï¿½ï¿½Ô¤ï¿½ï¿½: http://localhost:4000/
-echo [i] ï¿½ï¿½ï¿½ï¿½Ä¿ï¿½ï¿½ï¿½ï¿½ï¿½Ö§ï¿½Úºï¿½Ì¨ï¿½Ä¡ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Í¡ï¿½ï¿½ï¿½é¿´ï¿½ï¿½ï¿½Ô¶ï¿½ï¿½ï¿½ï¿½É¡ï¿½ï¿½Ö¶ï¿½ï¿½ï¿½ï¿½ï¿½
+echo [i] ¶ÀÁ¢ºóÌ¨: http://localhost:4000/admin/
+echo [i] ¸ÃÈë¿Ú²»ÒÀÀµ hexo server£¬Ç°¶Ë»òÖ÷Ìâ¸Ä»µÒ²ÄÜ´ò¿ªºóÌ¨
+echo [i] Õ¾µãÔ¤ÀÀÇëÁí¿ª´°¿ÚÔËÐÐ start-blog.cmd£¨http://localhost:4001/£©
+echo [i] Í£Ö¹·þÎñÇëÔËÐÐ stop-admin.cmd£¬»òÔÚ±¾´°¿Ú°´ Ctrl+C
 echo.
-call "%~dp0start-blog.cmd"
+
+set "BUNDLED_NODE=C:\Users\m1302\.dsh\dsh-runtimes\dsh-primary-runtime\dependencies\node\bin\node.exe"
+where node >nul 2>nul
+if %errorlevel%==0 (
+  node "tools\admin\standalone.js"
+  goto after
+)
+if exist "%BUNDLED_NODE%" (
+  "%BUNDLED_NODE%" "tools\admin\standalone.js"
+  goto after
+)
+echo [x] Î´ÕÒµ½ Node.js£¬Çë°²×° Node 18/20/22 LTS ºóÖØÊÔ¡£
+goto end_fail
+
+:after
 echo.
-echo [i] ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Í£Ö¹
+echo [i] ºóÌ¨½ø³ÌÒÑÍË³ö
 pause
 exit /b 0
 
 :port_busy
-echo [x] 4000 ï¿½Ë¿ï¿½ï¿½Ñ±ï¿½Õ¼ï¿½Ã£ï¿½ï¿½ÂµÄ·ï¿½ï¿½ï¿½ï¿½Þ·ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ç°Õ¼ï¿½ï¿½ï¿½ï¿½ï¿½:
+echo [x] 4000 ¶Ë¿ÚÒÑ±»Õ¼ÓÃ£¬ÎÞ·¨Æô¶¯ºóÌ¨¡£µ±Ç°Õ¼ÓÃ:
 netstat -ano | findstr ":4000" | findstr "LISTENING"
 echo.
-echo ï¿½ï¿½ï¿½ï¿½ï¿½ì·¨:
-echo   1. ï¿½Øµï¿½Ö®Ç°ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Õ¾ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ð´ï¿½ï¿½Ú£ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ó¦ï¿½ï¿½ node ï¿½ï¿½ï¿½ï¿½
-echo   2. ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ð±ï¿½ï¿½Å±ï¿½
+echo ´¦Àí°ì·¨:
+echo   1. ÏÈÔËÐÐ stop-admin.cmd Í£Ö¹¾ÉµÄºóÌ¨½ø³Ì
+echo   2. »òÔÚÈÎÎñ¹ÜÀíÆ÷Àï½áÊøÕ¼ÓÃ 4000 µÄ node ½ø³Ì
 echo.
-echo ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê¾Ëµï¿½ï¿½ï¿½ï¿½Ò³ï¿½ï¿½ï¿½Ï¿ï¿½ï¿½ï¿½ï¿½Ä¿ï¿½ï¿½ï¿½ï¿½Ç¾É·ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ç°ï¿½ï¿½ï¿½ï¿½Í£ï¿½ï¿½ï¿½ï¿½
+echo ÌáÊ¾£º½çÃæÉÏ¿´µ½µÄ¾ÉÊý¾Ý¿ÉÄÜÀ´×Ô¾É½ø³Ì£¬Îñ±ØÏÈÍ£¾É½ø³Ì¡£
 pause
 exit /b 1
 

@@ -1115,3 +1115,153 @@ test('源码：历史可分页一直往前翻，空仓库不报错', async funct
   }
 });
 
+/* ---------------------------------------------------------- 源码恢复 */
+
+/** 把工作仓库当前 HEAD 推到本地裸仓库的 source 分支，充当“GitHub 上的源码”。 */
+function seedSource(pair) {
+  gitExec(pair.work, ['push', pair.bare, 'HEAD:refs/heads/source']);
+  return gitExec(pair.work, ['rev-parse', 'HEAD']);
+}
+
+async function restoreServer(pair, extra) {
+  return startServer(pair.work, null, Object.assign({
+    sourceOptions: { repo: pair.bare, branch: 'source' },
+    runGenerate: function () { return Promise.resolve(); }
+  }, extra || {}));
+}
+
+test('源码恢复：先备份、覆盖已跟踪文件、保留未跟踪文件', async function () {
+  const pair = makeSourcePair();
+  const remoteSha = seedSource(pair);
+  const srv = await restoreServer(pair);
+  try {
+    const auth = await login(srv.base);
+    fs.writeFileSync(path.join(pair.work, 'README.md'), '# broken local\n', 'utf8');
+    fs.writeFileSync(path.join(pair.work, 'old.md'), 'broken old\n', 'utf8');
+    fs.writeFileSync(path.join(pair.work, 'notes.txt'), 'keep me\n', 'utf8');
+
+    const res = await call(srv.base, '/admin/api/source/restore', {
+      method: 'POST', cookie: auth.cookie, csrf: auth.csrf, body: {}
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.json.restored, true);
+    assert.equal(res.json.toSha, remoteSha);
+    assert.equal(res.json.shortTo, remoteSha.slice(0, 7));
+    assert.ok(res.json.backup.path.indexOf('bak/admin/restore/') === 0);
+
+    assert.ok(fs.existsSync(path.join(pair.work, res.json.backup.path, 'manifest.json')));
+    assert.equal(
+      fs.readFileSync(path.join(pair.work, res.json.backup.path, 'files', 'README.md'), 'utf8'),
+      '# broken local\n');
+    assert.ok(res.json.retained.indexOf('notes.txt') >= 0);
+
+    // Windows 上 core.autocrlf 可能把检出内容换成 CRLF，比较前统一换行符。
+    assert.equal(fs.readFileSync(path.join(pair.work, 'README.md'), 'utf8').replace(/\r\n/g, '\n'), '# demo\n');
+    assert.equal(fs.existsSync(path.join(pair.work, 'notes.txt')), true);
+    assert.equal(gitExec(pair.work, ['rev-parse', 'HEAD']), remoteSha);
+    assert.match(gitExec(pair.work, ['status', '--porcelain']), /notes\.txt/);
+  } finally {
+    await srv.close();
+    cleanup(pair.root);
+  }
+});
+
+test('源码恢复：备份失败则中止，不覆盖本地', async function () {
+  const pair = makeSourcePair();
+  seedSource(pair);
+  const srv = await restoreServer(pair);
+  try {
+    const auth = await login(srv.base);
+    fs.writeFileSync(path.join(pair.work, 'README.md'), '# broken local\n', 'utf8');
+    // 让 bak/admin/restore 无法创建：把 bak 变成一个普通文件。
+    fs.writeFileSync(path.join(pair.work, 'bak'), 'not a directory\n', 'utf8');
+
+    const before = gitExec(pair.work, ['rev-parse', 'HEAD']);
+    const res = await call(srv.base, '/admin/api/source/restore', {
+      method: 'POST', cookie: auth.cookie, csrf: auth.csrf, body: {}
+    });
+    assert.equal(res.status, 500);
+    assert.equal(res.json.error.code, 'SOURCE_BACKUP_FAILED');
+    assert.equal(gitExec(pair.work, ['rev-parse', 'HEAD']), before);
+    assert.equal(fs.readFileSync(path.join(pair.work, 'README.md'), 'utf8'), '# broken local\n');
+  } finally {
+    await srv.close();
+    cleanup(pair.root);
+  }
+});
+
+test('源码恢复：缺 CSRF 被拒且不产生备份', async function () {
+  const pair = makeSourcePair();
+  seedSource(pair);
+  const srv = await restoreServer(pair);
+  try {
+    const auth = await login(srv.base);
+    fs.writeFileSync(path.join(pair.work, 'README.md'), '# broken local\n', 'utf8');
+    const before = gitExec(pair.work, ['rev-parse', 'HEAD']);
+    const res = await call(srv.base, '/admin/api/source/restore', {
+      method: 'POST', cookie: auth.cookie, body: {}
+    });
+    assert.equal(res.status, 403);
+    assert.equal(gitExec(pair.work, ['rev-parse', 'HEAD']), before);
+    assert.equal(fs.existsSync(path.join(pair.work, 'bak', 'admin', 'restore')), false);
+  } finally {
+    await srv.close();
+    cleanup(pair.root);
+  }
+});
+
+test('源码恢复：hexo generate 失败不影响后台，错误原样返回', async function () {
+  const pair = makeSourcePair();
+  seedSource(pair);
+  const srv = await startServer(pair.work, null, {
+    sourceOptions: { repo: pair.bare, branch: 'source' },
+    runGenerate: function () { return Promise.reject(new Error('模板编译失败：test only')); }
+  });
+  try {
+    const auth = await login(srv.base);
+    fs.writeFileSync(path.join(pair.work, 'README.md'), '# broken local\n', 'utf8');
+    const res = await call(srv.base, '/admin/api/source/restore', {
+      method: 'POST', cookie: auth.cookie, csrf: auth.csrf, body: {}
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.json.restored, true);
+    assert.equal(res.json.generate.ok, false);
+    assert.match(res.json.generate.error, /模板编译失败/);
+
+    // 后台仍然可用：恢复之后还能正常读取源码状态。
+    const after = await call(srv.base, '/admin/api/source', { cookie: auth.cookie });
+    assert.equal(after.status, 200);
+  } finally {
+    await srv.close();
+    cleanup(pair.root);
+  }
+});
+
+test('独立入口：不依赖 hexo 即可启动并提供后台页面', async function () {
+  const pair = makeSourcePair();
+  const createStandalone = require('../admin/standalone.js');
+  const server = createStandalone({
+    baseDir: pair.work,
+    env: { ADMIN_USER: 'admin', ADMIN_PASSWORD: 'secret' },
+    runGenerate: function () { return Promise.resolve(); }
+  });
+  await new Promise(function (resolve) { server.listen(0, '127.0.0.1', resolve); });
+  const base = 'http://127.0.0.1:' + server.address().port;
+  try {
+    const page = await fetch(base + '/admin/');
+    assert.equal(page.status, 200);
+    assert.match(page.headers.get('content-type') || '', /text\/html/);
+
+    const session = await (await fetch(base + '/admin/api/session')).json();
+    assert.equal(session.configured, true);
+    assert.equal(session.authenticated, false);
+
+    const root = await fetch(base + '/', { redirect: 'manual' });
+    assert.equal(root.status, 302);
+    assert.equal(root.headers.get('location'), '/admin/');
+  } finally {
+    await new Promise(function (resolve) { server.close(resolve); });
+    cleanup(pair.root);
+  }
+});
+

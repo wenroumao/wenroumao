@@ -836,6 +836,8 @@ function renderSource(data, append) {
   $('source-repo').textContent = data.repo;
   $('source-note').textContent = '本地分支 ' + (data.localBranch || '未知') +
     ' · HEAD ' + (data.head || '无') + ' · 推送目标 ' + data.branch;
+  $('source-restore-head').textContent = data.head || '无提交';
+  $('source-restore-target').textContent = '远端 ' + data.branch;
   if (data.clean !== null && data.clean !== undefined) {
     const badge = $('source-state');
     if (data.changes.length) {
@@ -950,6 +952,103 @@ async function commitSource() {
     }
   } finally {
     btn.textContent = '提交并推送';
+    btn.disabled = false;
+  }
+}
+
+function renderRestoreResult(data) {
+  const box = $('source-restore-result');
+  const lines = [];
+  lines.push('✓ 已恢复到 ' + data.shortTo + '（' + String(data.fromSha || '').slice(0, 7) + ' → ' + data.shortTo + '）');
+  if (data.backup && data.backup.path) lines.push('备份：' + data.backup.path);
+  if (data.backup && data.backup.count) lines.push('备份条目：' + data.backup.count + ' 个');
+  if (data.dependencyWarning) lines.push('⚠ ' + data.dependencyWarning);
+  if (data.generate && data.generate.ok === false) lines.push('✗ hexo generate 失败：' + data.generate.error);
+  if (data.retained && data.retained.length) {
+    lines.push('保留的未跟踪文件（' + data.retained.length + ' 个）：' +
+      data.retained.slice(0, 12).join('、') + (data.retained.length > 12 ? ' …' : ''));
+  }
+  box.textContent = lines.join('\n');
+  box.hidden = false;
+  box.className = 'restore-result ' + (data.generate && data.generate.ok === false ? 'is-warn' : 'is-ok');
+}
+
+function renderRestoreError(backupPath, message) {
+  const box = $('source-restore-result');
+  box.textContent = '✗ 恢复未完成：' + message + (backupPath ? '\n已保留备份：' + backupPath : '');
+  box.hidden = false;
+  box.className = 'restore-result is-warn';
+}
+
+async function restoreSource() {
+  const btn = $('btn-source-restore');
+  btn.disabled = true;
+  $('source-hint').textContent = '正在读取远端 source…';
+
+  let info;
+  try {
+    info = await api('/source?remote=1');
+  } catch (err) {
+    toast('读取远端失败：' + err.message, 'error');
+    $('source-hint').textContent = err.message;
+    btn.disabled = false;
+    return;
+  }
+  state.source.info = info;
+  renderSource(info, false);
+
+  const remote = info.remote || {};
+  if (!remote.ok || !remote.sha) {
+    toast('取不到远端 source：' + (remote.error || '分支可能还不存在'), 'error');
+    $('source-hint').textContent = '无法读取远端 source，已取消恢复。' + (remote.error || '');
+    btn.disabled = false;
+    return;
+  }
+
+  const files = info.changes || [];
+  const ok = await confirmModal({
+    title: '用远端源码覆盖本地？',
+    html: '<p>将丢弃本地未提交的修改，并已自动备份到 <code>bak/admin/restore/&lt;时间戳&gt;/</code>。</p>' +
+      '<p>目标：远端 <code>' + escapeHtml(info.repo) + '</code> 的 <code>' + escapeHtml(info.branch) + '</code> 分支</p>' +
+      '<p>当前 HEAD <code>' + escapeHtml(info.head || '未知') + '</code> → 目标 <code>' +
+      escapeHtml(remote.sha.slice(0, 7)) + '</code></p>' +
+      '<p>这会把本地 <code>' + escapeHtml(info.localBranch || 'main') + '</code> 指针改成与远端 <code>' +
+      escapeHtml(info.branch) + '</code> 一致；只改本地，不会推送到远端。</p>' +
+      '<p>会被覆盖的本地文件（' + files.length + ' 个）：</p>' +
+      (files.length
+        ? '<ul class="modal-files">' + files.map(function (row) {
+          return '<li>' + escapeHtml(row.status) + ' ' + escapeHtml(row.path) + '</li>';
+        }).join('') + '</ul>'
+        : '<p class="muted">本地没有改动，仍会把 main 指向远端 source。</p>') +
+      '<p>未跟踪文件会保留，不执行 <code>git clean</code>。恢复后会重新执行 hexo generate。</p>',
+    confirmText: '备份并覆盖本地'
+  });
+
+  if (!ok) {
+    btn.disabled = false;
+    $('source-hint').textContent = '';
+    return;
+  }
+
+  btn.textContent = '正在备份并覆盖…';
+  $('source-hint').textContent = '正在备份 → fetch → reset --hard → hexo generate。';
+  try {
+    const data = await api('/source/restore', { method: 'POST', csrf: true, body: {} });
+    renderSourceLog(data.log);
+    renderRestoreResult(data);
+    toast('已恢复到 ' + data.shortTo, 'ok');
+    $('source-message').value = '';
+    updateSourceCount();
+    await loadSource();
+  } catch (err) {
+    const body = err.body || {};
+    renderSourceLog(body.log || body.raw || err.message);
+    if (body.backup && body.backup.path) renderRestoreError(body.backup.path, err.message);
+    toast('恢复失败：' + err.message, 'error');
+    $('source-hint').textContent = err.message;
+    await loadSource();
+  } finally {
+    btn.textContent = '用远端源码覆盖本地';
     btn.disabled = false;
   }
 }
@@ -1544,6 +1643,7 @@ function bind() {
     $('source-more').disabled = true;
     loadSource(true);
   });
+  $('btn-source-restore').addEventListener('click', restoreSource);
 
   // 弹窗
   $('modal-ok').addEventListener('click', function () { closeModal(true); });

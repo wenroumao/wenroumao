@@ -4,7 +4,7 @@ setlocal enabledelayedexpansion
 cd /d "%~dp0"
 
 rem 一键停止本地后台服务：只处理监听 4000 且能确认是本项目后台的进程。
-rem 校验顺序：端口监听 -> PID -> 进程名 node -> 命令行含 hexo 且包含本项目路径，
+rem 校验顺序：端口监听 -> PID -> 进程名 node -> 命令行含本项目路径（hexo 或 standalone），
 rem 命令行里看不出项目时再用 /admin/api/session 接口确认身份，绝不按进程名批量结束 node。
 
 set "PORT=4000"
@@ -61,7 +61,7 @@ timeout /t 1 /nobreak >nul
 goto wait_loop
 
 :stopped_ok
-echo [i] 4000 端口已释放，站点预览也随之停止。
+echo [i] 4000 端口已释放，独立后台已停止；站点预览（4001）如仍在运行，请另行停止。
 echo [i] 需要重新启动请双击 start-admin.cmd
 echo.
 pause

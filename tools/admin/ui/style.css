@@ -1113,3 +1113,11 @@ html[data-theme="dark"] .diff-del { background: rgba(224, 112, 79, .13); }
 .source-history-head .btn { margin-left: auto; }
 .empty.small { padding: 28px 0; }
 .empty.small p { font-size: 15px; }
+
+.danger-zone { border-left: 3px solid var(--danger); }
+.restore-meta { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 12px 0; font-size: 12px; color: var(--muted); }
+.restore-meta code { font-family: var(--mono); color: var(--ink); }
+.restore-result { margin-top: 14px; padding: 12px 14px; border: 1px solid var(--line); font: 12px/1.65 var(--mono); white-space: pre-wrap; word-break: break-word; }
+.restore-result.is-ok { border-color: var(--accent); }
+.restore-result.is-warn { border-color: var(--danger); }
+.modal-files { max-height: 180px; overflow: auto; margin: 8px 0 0; padding-left: 18px; font: 11.5px/1.6 var(--mono); }

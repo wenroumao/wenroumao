@@ -13,6 +13,7 @@
  *   3. 不用 shell：所有 git 参数都以数组传给 spawn，提交说明不会被解释成命令。
  */
 
+const fs = require('fs');
 const path = require('path');
 const { spawn, execFileSync } = require('child_process');
 const { StringDecoder } = require('string_decoder');
@@ -357,6 +358,163 @@ async function commitAndPush(baseDir, rawMessage, options) {
   return result;
 }
 
+/* ------------------------------------------------------------ 从远端恢复 */
+
+function stampNow() {
+  const d = new Date();
+  function pad(n) { return String(n).length < 2 ? '0' + n : String(n); }
+  return d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + '-' +
+    pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds());
+}
+
+function isInside(baseDir, target) {
+  const root = path.resolve(baseDir);
+  const abs = path.resolve(target);
+  return abs === root || abs.indexOf(root + path.sep) === 0;
+}
+
+/** 恢复后仍留在工作区的未跟踪文件（不含私有目录/凭据）。 */
+function listUntracked(baseDir) {
+  try {
+    return parseStatus(gitSync(baseDir, ['status', '--porcelain=v1', '-z', '--untracked-files=all']))
+      .filter(function (row) { return row.code === '??' && !isExcluded(row.path); })
+      .map(function (row) { return row.path; })
+      .sort();
+  } catch (e) { return []; }
+}
+
+function blobAt(baseDir, rev, file) {
+  try {
+    return String(execFileSync('git', ['rev-parse', rev + ':' + file], {
+      cwd: baseDir, encoding: 'utf8', windowsHide: true,
+      // 文件不存在时 git 会往 stderr 写 fatal，这里静默掉：缺文件本身就等于“没变化”。
+      stdio: ['ignore', 'pipe', 'ignore']
+    })).trim();
+  } catch (e) { return ''; }
+}
+
+/**
+ * 把当前改动复制到 bak/admin/restore/<时间戳>/，并写 manifest.json + worktree.patch。
+ * 任何一步失败都抛 SOURCE_BACKUP_FAILED，调用方必须放弃覆盖。
+ */
+function backupWorktree(baseDir, changes, stamp) {
+  const relPath = 'bak/admin/restore/' + stamp;
+  const dest = path.join(baseDir, 'bak', 'admin', 'restore', stamp);
+  const filesDir = path.join(dest, 'files');
+  const entries = [];
+  try {
+    fs.mkdirSync(filesDir, { recursive: true });
+    changes.forEach(function (row) {
+      if (isExcluded(row.path)) return;
+      if (row.status === 'D') {
+        entries.push({ path: row.path, status: 'D', saved: false, note: '文件已删除，内容不在工作区' });
+        return;
+      }
+      const src = path.join(baseDir, row.path);
+      if (!isInside(baseDir, src)) throw new Error('路径越界：' + row.path);
+      const dst = path.join(filesDir, row.path);
+      fs.mkdirSync(path.dirname(dst), { recursive: true });
+      fs.copyFileSync(src, dst);
+      entries.push({ path: row.path, status: row.status, saved: true });
+    });
+
+    // 补丁兜底：即使有「已暂存但工作区又改过」的边缘情况，也能从 patch 找回。
+    let patch = '';
+    try { patch = gitSync(baseDir, ['diff', 'HEAD', '--binary']); } catch (e) { patch = ''; }
+    if (patch) fs.writeFileSync(path.join(dest, 'worktree.patch'), patch, 'utf8');
+
+    const manifest = {
+      createdAt: new Date().toISOString(),
+      head: String(gitSync(baseDir, ['rev-parse', 'HEAD'])).trim(),
+      files: entries
+    };
+    fs.writeFileSync(path.join(dest, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n', 'utf8');
+    return { dir: relPath, absDir: dest, count: entries.length, files: entries };
+  } catch (err) {
+    // fs 的 ENOTDIR / EACCES 等错误也有 code，不能当成业务错误直接透传。
+    if (err && /^SOURCE_/.test(String(err.code || ''))) throw err;
+    throw sourceError('SOURCE_BACKUP_FAILED', '备份失败，已中止恢复：' + err.message, err.message);
+  }
+}
+
+/**
+ * 用远端分支覆盖本地：先强制备份工作区，再 fetch + reset --hard。
+ * 不使用 git clean：未跟踪文件原样保留。fetch/reset 都不触碰远端。
+ */
+async function restoreFromRemote(baseDir, options) {
+  const opts = options || {};
+  const repo = String(opts.repo || DEFAULT_REPO);
+  const branch = String(opts.branch || DEFAULT_BRANCH);
+  const log = opts.log || function () {};
+  const result = {
+    restored: false,
+    fromSha: '',
+    toSha: '',
+    shortTo: '',
+    backup: null,
+    retained: [],
+    dependencyWarning: '',
+    generate: { ok: true, error: '' },
+    log: ''
+  };
+  function note(text) { result.log += text; }
+
+  assertRepo(baseDir);
+  const changes = listChanges(baseDir);
+
+  // 1) 先备份：失败就结束，绝不进入覆盖步骤。
+  const backup = backupWorktree(baseDir, changes, stampNow());
+  result.backup = { path: backup.dir, absPath: backup.absDir, count: backup.count, files: backup.files };
+  note('$ 备份工作区 → ' + backup.dir + '（' + backup.count + ' 项）\n');
+
+  const fromSha = String(gitSync(baseDir, ['rev-parse', 'HEAD'])).trim();
+  result.fromSha = fromSha;
+
+  try {
+    // 2) 取远端 source，再让本地分支指向它。
+    note('$ git fetch ' + repo + ' refs/heads/' + branch + '\n');
+    await gitRun(baseDir, ['fetch', '--no-tags', repo, 'refs/heads/' + branch],
+      { log: note, timeoutMs: 240000 });
+
+    const toSha = String(gitSync(baseDir, ['rev-parse', 'FETCH_HEAD'])).trim();
+    result.toSha = toSha;
+    result.shortTo = toSha.slice(0, 7);
+
+    const depChanged = ['package.json', 'package-lock.json'].some(function (file) {
+      return blobAt(baseDir, 'HEAD', file) !== blobAt(baseDir, 'FETCH_HEAD', file);
+    });
+
+    note('$ git reset --hard FETCH_HEAD\n');
+    await gitRun(baseDir, ['reset', '--hard', 'FETCH_HEAD'], { log: note });
+    result.restored = true;
+    result.retained = listUntracked(baseDir);
+    if (depChanged) {
+      result.dependencyWarning = '依赖可能已变（package.json / package-lock.json 与恢复前不同），需要重新 npm install。';
+    }
+    note('✓ 已恢复到 ' + result.shortTo + '\n');
+  } catch (err) {
+    const raw = String((err && (err.raw || err.message)) || err).trim();
+    const failed = err && err.code ? err : sourceError('SOURCE_RESTORE_FAILED', '恢复失败：' + raw, raw);
+    failed.backup = result.backup;
+    failed.fromSha = fromSha;
+    failed.log = result.log;
+    throw failed;
+  }
+
+  // 3) 生成失败不影响后台存活，只把原始错误带回前端。
+  if (opts.runGenerate) {
+    try {
+      await opts.runGenerate({ log: note });
+      result.generate = { ok: true, error: '' };
+    } catch (err) {
+      result.generate = { ok: false, error: String((err && (err.raw || err.message)) || err).trim() };
+      note('\n✗ hexo generate 失败：' + result.generate.error + '\n');
+    }
+  }
+
+  return result;
+}
+
 /** 相对仓库根的路径检查，确保后台只在仓库内执行。 */
 function assertRepo(baseDir) {
   let root = '';
@@ -379,5 +537,8 @@ module.exports = {
   isExcluded: isExcluded,
   validateMessage: validateMessage,
   commitAndPush: commitAndPush,
+  remoteBranchSha: remoteBranchSha,
+  restoreFromRemote: restoreFromRemote,
+  listUntracked: listUntracked,
   assertRepo: assertRepo
 };
