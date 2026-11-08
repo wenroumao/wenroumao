@@ -131,7 +131,8 @@ function applyTheme(theme) {
   $('theme-label').textContent = next === 'dark' ? '浅色' : '深色';
   const frame = $('preview-frame');
   if (frame && frame.contentWindow) {
-    frame.contentWindow.postMessage({ type: 'preview-theme', theme: next }, '*');
+    // 预览始终按站点默认浅色主题渲染，不跟随后台深色主题，避免正文黑字落到深色纸面上
+    frame.contentWindow.postMessage({ type: 'preview-theme', theme: 'light' }, '*');
   }
 }
 
@@ -670,7 +671,7 @@ function pushPreview() {
   if (!frame || !frame.contentWindow) return;
   const ready = previewFrameReady();
   frame.contentWindow.postMessage({
-    type: 'preview-render', html: state.pendingHtml, theme: currentTheme()
+    type: 'preview-render', html: state.pendingHtml, theme: 'light'
   }, '*');
   clearTimeout(state.previewRetry);
   if (!ready && state.previewTries < 40) {

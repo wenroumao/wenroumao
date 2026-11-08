@@ -580,7 +580,10 @@ code { font-family: var(--mono); font-size: .92em; }
   tab-size: 2;
   outline: none;
 }
-#preview-frame { display: block; width: 100%; height: 100%; border: 0; background: var(--paper); }
+/* 预览固定按站点浅色纸面呈现：iframe 内是站点正文，不能把站点深色文字落到后台深色底上 */
+.pane-preview { background: #fff; }
+#preview-frame { display: block; width: 100%; height: 100%; border: 0; background: #fff; }
+html[data-theme="dark"] .pane-preview { box-shadow: inset 0 0 0 1px var(--line-strong); }
 
 .panes[data-pane="edit"] .pane-preview,
 .panes[data-pane="edit"] .pane-splitter { display: none; }
