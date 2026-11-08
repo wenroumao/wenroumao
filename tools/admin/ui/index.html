@@ -5,8 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
 <title>站点控制台</title>
-<link rel="stylesheet" href="style.css?v=20261108n">
-<script src="app.js?v=20261108n" defer></script>
+<link rel="stylesheet" href="style.css?v=20261108p">
+<script src="snippets.js?v=20261108o" defer></script>
+<script src="app.js?v=20261108q" defer></script>
 </head>
 <body>
 <div class="grain" aria-hidden="true"></div>
@@ -191,16 +192,94 @@
         </div>
         <label class="switch switch-sm"><input id="editor-sync" type="checkbox" checked><span>滚动同步</span></label>
         <span id="editor-stats" class="editor-stats"></span>
+        <div class="editor-import">
+          <button id="editor-import-md" class="ghost-btn" type="button">导入 .md</button>
+          <button id="editor-import-url" class="ghost-btn" type="button">网页导入</button>
+        </div>
       </div>
+
+      <div id="md-toolbar" class="md-toolbar" role="toolbar" aria-label="Markdown 工具栏">
+        <div class="md-group">
+          <button data-md="bold" title="加粗（Ctrl+B）" type="button"><b>B</b></button>
+          <button data-md="italic" title="斜体（Ctrl+I）" type="button"><i>I</i></button>
+          <button data-md="strike" title="删除线" type="button"><s>S</s></button>
+          <button data-md="code" title="行内代码" type="button">&lt;/&gt;</button>
+          <button data-md="link" title="链接（Ctrl+K）" type="button">链接</button>
+          <button data-md="image" title="插入图片（可上传到 OSS）" type="button">图片</button>
+        </div>
+        <div class="md-group">
+          <select id="md-heading" class="md-select" title="标题级别">
+            <option value="0">正文</option>
+            <option value="1">H1</option>
+            <option value="2">H2</option>
+            <option value="3">H3</option>
+            <option value="4">H4</option>
+            <option value="5">H5</option>
+            <option value="6">H6</option>
+          </select>
+          <button data-md="quote" title="引用" type="button">引用</button>
+          <button data-md="ul" title="无序列表" type="button">列表</button>
+          <button data-md="ol" title="有序列表" type="button">1.</button>
+          <button data-md="task" title="任务列表" type="button">任务</button>
+          <button data-md="hr" title="分隔线" type="button">—</button>
+        </div>
+        <div class="md-group md-html-tools">
+          <input id="md-color" type="color" value="#c0392b" title="文字颜色">
+          <select id="md-size" class="md-select" title="字号">
+            <option value="">字号</option>
+            <option value="12px">12px</option>
+            <option value="14px">14px</option>
+            <option value="16px">16px</option>
+            <option value="18px">18px</option>
+            <option value="20px">20px</option>
+            <option value="24px">24px</option>
+            <option value="28px">28px</option>
+            <option value="32px">32px</option>
+          </select>
+          <button data-md="align-left" title="左对齐" type="button">左</button>
+          <button data-md="align-center" title="居中" type="button">居中</button>
+          <button data-md="align-right" title="右对齐" type="button">右</button>
+          <button data-md="center-block" title="把选中段落包进居中块" type="button">居中块</button>
+        </div>
+        <div class="md-group">
+          <button data-md="undo" title="撤销" type="button">撤销</button>
+          <button data-md="redo" title="重做" type="button">重做</button>
+          <button data-md="find" title="查找替换" type="button">查找</button>
+        </div>
+        <div class="md-group">
+          <button data-md="table" title="插入表格" type="button">表格</button>
+          <button data-md="toc" title="插入目录标记" type="button">目录</button>
+          <button data-md="snippets" title="代码片段库" type="button">片段</button>
+        </div>
+        <label class="switch switch-sm md-inline-switch">
+          <input id="md-inline-html" type="checkbox" checked><span>允许内联 HTML</span>
+        </label>
+      </div>
+
+      <div id="md-find" class="md-find" hidden>
+        <input id="find-text" type="text" placeholder="查找内容" autocomplete="off">
+        <input id="replace-text" type="text" placeholder="替换为" autocomplete="off">
+        <button id="find-prev" class="ghost-btn" type="button">上一个</button>
+        <button id="find-next" class="ghost-btn" type="button">下一个</button>
+        <button id="find-one" class="ghost-btn" type="button">替换</button>
+        <button id="find-all" class="ghost-btn" type="button">全部替换</button>
+        <span id="find-count" class="find-count"></span>
+        <button id="find-close" class="ghost-btn" type="button">关闭</button>
+      </div>
+
+      <div id="snippets-panel" class="snippets-panel" hidden></div>
 
       <div id="editor-panes" class="panes" data-pane="split">
         <div class="pane pane-edit">
           <textarea id="editor-body" spellcheck="false" placeholder="在这里写 Markdown…"></textarea>
+          <div id="editor-drop" class="drop-hint" hidden>松开鼠标导入 .md（会覆盖当前编辑内容）</div>
         </div>
+        <div id="pane-splitter" class="pane-splitter" role="separator" aria-orientation="vertical" title="拖动调整左右比例"></div>
         <div class="pane pane-preview">
           <iframe id="preview-frame" src="/admin/preview" title="文章预览" sandbox="allow-scripts allow-same-origin"></iframe>
         </div>
       </div>
+      <input id="import-file" type="file" accept=".md,.markdown,text/markdown" hidden>
     </section>
 
     <!-- 配置 -->
@@ -580,6 +659,55 @@
     <div class="modal-actions">
       <button id="modal-cancel" class="btn" type="button">取消</button>
       <button id="modal-ok" class="btn btn-danger" type="button">确认</button>
+    </div>
+  </div>
+</div>
+
+<!-- 网页导入 -->
+<div id="url-modal" class="modal" hidden>
+  <div class="modal-mask" data-url-cancel></div>
+  <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="url-modal-title">
+    <h2 id="url-modal-title">从网页导入</h2>
+    <p class="modal-text">填入文章页的 http(s) 地址。抓取成功后会替换当前正文，导入前会再确认一次。</p>
+    <input id="url-input" class="url-input" type="url" placeholder="https://example.com/post" autocomplete="off" spellcheck="false">
+    <p id="url-hint" class="modal-hint"></p>
+    <div class="modal-actions">
+      <button id="url-cancel" class="btn" type="button">取消</button>
+      <button id="url-ok" class="btn btn-primary" type="button">抓取并导入</button>
+    </div>
+  </div>
+</div>
+
+<!-- 插入图片 -->
+<div id="image-modal" class="modal" hidden>
+  <div class="modal-mask" data-image-cancel></div>
+  <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="image-modal-title">
+    <h2 id="image-modal-title">插入图片</h2>
+    <p class="modal-text">选中图片会先上传到 OSS 再回填链接；OSS 未配置或上传失败时，可以直接填图片地址。</p>
+    <label class="field"><span>上传到 OSS</span><input id="image-file" type="file" accept="image/*"></label>
+    <p id="image-hint" class="modal-hint"></p>
+    <label class="field"><span>图片地址</span><input id="image-url" class="url-input" type="url" placeholder="https://example.com/a.png"></label>
+    <label class="field"><span>图片说明（可选）</span><input id="image-alt" type="text" placeholder="alt 文本"></label>
+    <div class="modal-actions">
+      <button id="image-cancel" class="btn" type="button">取消</button>
+      <button id="image-ok" class="btn btn-primary" type="button">插入</button>
+    </div>
+  </div>
+</div>
+
+<!-- 插入表格 -->
+<div id="table-modal" class="modal" hidden>
+  <div class="modal-mask" data-table-cancel></div>
+  <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="table-modal-title">
+    <h2 id="table-modal-title">插入表格</h2>
+    <p class="modal-text">生成带表头的 Markdown 表格，插入后可直接改单元格内容。</p>
+    <div class="table-size-row">
+      <label class="field"><span>行数（含表头）</span><input id="table-rows" type="number" min="1" max="30" value="3"></label>
+      <label class="field"><span>列数</span><input id="table-cols" type="number" min="1" max="12" value="3"></label>
+    </div>
+    <div class="modal-actions">
+      <button id="table-cancel" class="btn" type="button">取消</button>
+      <button id="table-ok" class="btn btn-primary" type="button">插入</button>
     </div>
   </div>
 </div>

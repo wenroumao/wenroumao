@@ -380,6 +380,7 @@ function fillEditor(post) {
   $('editor-comments').checked = post.comments !== false;
   $('editor-body').value = post.body || '';
   updateStats();
+  resetMdHistory();
 }
 
 async function openEditor(name) {
@@ -547,6 +548,593 @@ function updateStats() {
   const lines = text ? text.split('\n').length : 0;
   const minutes = Math.max(1, Math.round(chars / 300));
   $('editor-stats').textContent = chars + ' 字 · ' + lines + ' 行 · 约 ' + minutes + ' 分钟';
+}
+
+/* ------------------------------------------------------------ 导入（一期） */
+
+const IMPORT_MAX_BYTES = 2 * 1024 * 1024;
+
+function confirmImportOverwrite() {
+  return confirmModal({
+    title: '导入会覆盖当前编辑内容',
+    text: '当前编辑器里的标题、正文与其它字段都会被导入内容替换。确定继续吗？',
+    confirmText: '覆盖并导入'
+  });
+}
+
+/** 把后端解析好的字段填进编辑器；没给的字段保持原样。 */
+function applyImportedPost(data, sourceLabel) {
+  if (data.title) $('editor-title').value = data.title;
+  if (data.date) $('editor-date').value = data.date;
+  if (data.categories && data.categories.length) $('editor-categories').value = data.categories.join(', ');
+  if (data.tags && data.tags.length) $('editor-tags').value = data.tags.join(', ');
+  if (data.cover) $('editor-cover').value = data.cover;
+  if (data.description) $('editor-description').value = data.description;
+  if (typeof data.comments === 'boolean') $('editor-comments').checked = data.comments;
+  if (typeof data.published === 'boolean') $('editor-draft').checked = !data.published;
+  $('editor-body').value = data.body || '';
+  setDirty(true);
+  updateStats();
+  schedulePreview(true);
+
+  const warnings = data.warnings || [];
+  if (warnings.length) toast((sourceLabel || '导入') + '：' + warnings[0], 'error');
+  else toast((sourceLabel || '导入') + ' 已导入。', 'ok');
+}
+
+async function importMarkdownFile(file) {
+  if (!file) return;
+  const nameOk = /\.(md|markdown)$/i.test(file.name) || String(file.type || '').indexOf('markdown') >= 0;
+  if (!nameOk) {
+    toast('只支持 .md / .markdown 文件。', 'error');
+    return;
+  }
+  if (file.size > IMPORT_MAX_BYTES) {
+    toast('文件超过 2 MB（' + (file.size / 1024 / 1024).toFixed(1) + ' MB），请拆分后再导入。', 'error');
+    return;
+  }
+  if (!(await confirmImportOverwrite())) return;
+
+  let text = '';
+  try {
+    text = await file.text();
+  } catch (err) {
+    toast('读取文件失败：' + err.message, 'error');
+    return;
+  }
+  try {
+    const data = await api('/import/md', { method: 'POST', body: { text: text }, csrf: true });
+    applyImportedPost(data, file.name);
+  } catch (err) {
+    toast('导入失败：' + err.message, 'error');
+  }
+}
+
+function openUrlModal() {
+  $('url-input').value = '';
+  const hint = $('url-hint');
+  hint.textContent = '';
+  hint.classList.remove('is-error');
+  $('url-ok').disabled = false;
+  $('url-modal').hidden = false;
+  $('url-input').focus();
+}
+
+function closeUrlModal() {
+  $('url-modal').hidden = true;
+}
+
+async function submitUrlImport() {
+  const url = $('url-input').value.trim();
+  const hint = $('url-hint');
+  hint.classList.remove('is-error');
+  if (!/^https?:\/\//i.test(url)) {
+    hint.textContent = '需要完整的 http:// 或 https:// 地址。';
+    hint.classList.add('is-error');
+    return;
+  }
+  if (!(await confirmImportOverwrite())) return;
+
+  const btn = $('url-ok');
+  btn.disabled = true;
+  hint.textContent = '正在抓取并转换，最多等 15 秒…';
+  try {
+    const data = await api('/import/url', { method: 'POST', body: { url: url }, csrf: true });
+    closeUrlModal();
+    applyImportedPost({
+      title: data.title,
+      body: data.markdown,
+      warnings: data.warnings
+    }, '网页导入');
+  } catch (err) {
+    hint.textContent = err.message;
+    hint.classList.add('is-error');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+/* ---------------------------------------------------------- 编辑器工具（二期） */
+
+const MD_HISTORY_LIMIT = 60;
+const mdHistory = { states: [], index: -1, muted: false };
+
+function editorTextarea() { return $('editor-body'); }
+
+function resetMdHistory() {
+  mdHistory.states = [];
+  mdHistory.index = -1;
+  mdHistory.muted = false;
+  pushMdHistory();
+}
+
+function pushMdHistory() {
+  if (mdHistory.muted) return;
+  const ta = editorTextarea();
+  const last = mdHistory.states[mdHistory.index];
+  if (last && last.value === ta.value) {
+    last.start = ta.selectionStart;
+    last.end = ta.selectionEnd;
+    return;
+  }
+  mdHistory.states = mdHistory.states.slice(0, mdHistory.index + 1);
+  mdHistory.states.push({ value: ta.value, start: ta.selectionStart, end: ta.selectionEnd });
+  if (mdHistory.states.length > MD_HISTORY_LIMIT) mdHistory.states.shift();
+  mdHistory.index = mdHistory.states.length - 1;
+}
+
+function restoreMdHistory(target) {
+  if (target < 0 || target >= mdHistory.states.length) return;
+  const snapshot = mdHistory.states[target];
+  const ta = editorTextarea();
+  mdHistory.muted = true;
+  ta.value = snapshot.value;
+  mdHistory.index = target;
+  ta.focus();
+  ta.setSelectionRange(Math.min(snapshot.start, ta.value.length), Math.min(snapshot.end, ta.value.length));
+  mdHistory.muted = false;
+  afterEditorMutation(false);
+}
+
+function afterEditorMutation(recordHistory) {
+  setDirty(true);
+  updateStats();
+  schedulePreview();
+  if (recordHistory !== false) pushMdHistory();
+}
+
+function replaceEditorRange(start, end, text, selectStart, selectEnd) {
+  const ta = editorTextarea();
+  const value = ta.value;
+  ta.value = value.slice(0, start) + text + value.slice(end);
+  const from = selectStart == null ? start + text.length : selectStart;
+  const to = selectEnd == null ? from : selectEnd;
+  ta.focus();
+  ta.setSelectionRange(Math.min(from, ta.value.length), Math.min(to, ta.value.length));
+  afterEditorMutation();
+}
+
+function wrapEditorSelection(prefix, suffix, placeholder) {
+  const ta = editorTextarea();
+  const start = ta.selectionStart;
+  const end = ta.selectionEnd;
+  const selected = ta.value.slice(start, end);
+  const text = selected || placeholder || '';
+  const innerStart = start + prefix.length;
+  replaceEditorRange(start, end, prefix + text + suffix, innerStart, innerStart + text.length);
+}
+
+function selectedLineBounds() {
+  const ta = editorTextarea();
+  const start = ta.value.lastIndexOf('\n', ta.selectionStart - 1) + 1;
+  let end = ta.value.indexOf('\n', ta.selectionEnd);
+  if (end === -1) end = ta.value.length;
+  return { start: start, end: end, value: ta.value.slice(start, end) };
+}
+
+function applyHeading(level) {
+  const bounds = selectedLineBounds();
+  const lines = bounds.value.split('\n');
+  const plain = lines.map(function (line) { return line.replace(/^\s*#{1,6}\s+/, ''); });
+  const next = level > 0
+    ? plain.map(function (line) { return line.trim() ? '#'.repeat(level) + ' ' + line.replace(/^\s+/, '') : line; })
+    : plain;
+  const text = next.join('\n');
+  replaceEditorRange(bounds.start, bounds.end, text, bounds.start, bounds.start + text.length);
+}
+
+function toggleLinePrefix(word, testRe, stripRe) {
+  const bounds = selectedLineBounds();
+  const lines = bounds.value.split('\n');
+  const filled = lines.filter(function (line) { return line.trim(); });
+  const allHave = filled.length > 0 && filled.every(function (line) { return testRe.test(line); });
+  let index = 0;
+  const next = lines.map(function (line) {
+    if (!line.trim()) return line;
+    const plain = line.replace(stripRe, '');
+    index += 1;
+    if (allHave) return plain;
+    if (word === 'ordered') return index + '. ' + plain;
+    return word + plain;
+  });
+  const text = next.join('\n');
+  replaceEditorRange(bounds.start, bounds.end, text, bounds.start, bounds.start + text.length);
+}
+
+function wrapInlineStyle(prop, value, placeholder) {
+  const ta = editorTextarea();
+  const start = ta.selectionStart;
+  const end = ta.selectionEnd;
+  const selected = ta.value.slice(start, end) || placeholder;
+  const open = '<span style="' + prop + ':' + value + '">';
+  const text = open + selected + '</span>';
+  const innerStart = start + open.length;
+  replaceEditorRange(start, end, text, innerStart, innerStart + selected.length);
+}
+
+function wrapParagraph(open, close) {
+  const ta = editorTextarea();
+  const start = ta.selectionStart;
+  const end = ta.selectionEnd;
+  const selected = ta.value.slice(start, end) || '这里写内容';
+  const text = '\n\n' + open + '\n' + selected + '\n' + close + '\n\n';
+  const innerAt = text.indexOf(selected);
+  replaceEditorRange(start, end, text, start + innerAt, start + innerAt + selected.length);
+}
+
+function handleMdCommand(command) {
+  const ta = editorTextarea();
+  switch (command) {
+    case 'bold': wrapEditorSelection('**', '**', '加粗文字'); break;
+    case 'italic': wrapEditorSelection('*', '*', '斜体文字'); break;
+    case 'strike': wrapEditorSelection('~~', '~~', '删除线文字'); break;
+    case 'code': wrapEditorSelection('`', '`', '代码'); break;
+    case 'link': {
+      const selected = ta.value.slice(ta.selectionStart, ta.selectionEnd);
+      wrapEditorSelection('[', '](https://example.com)', selected || '链接文字');
+      break;
+    }
+    case 'image': openImageModal(); break;
+    case 'quote': toggleLinePrefix('> ', /^\s*>\s?/, /^\s*>\s?/); break;
+    case 'ul': toggleLinePrefix('- ', /^\s*[-*+]\s+/, /^\s*[-*+]\s+/); break;
+    case 'task': toggleLinePrefix('- [ ] ', /^\s*-\s\[[ xX]\]\s+/, /^\s*-\s\[[ xX]\]\s+/); break;
+    case 'ol': toggleLinePrefix('ordered', /^\s*\d+\.\s+/, /^\s*\d+\.\s+/); break;
+    case 'hr': replaceEditorRange(ta.selectionStart, ta.selectionStart, '\n\n---\n\n'); break;
+    case 'align-left': wrapParagraph('<div align="left">', '</div>'); break;
+    case 'align-center': wrapParagraph('<div align="center">', '</div>'); break;
+    case 'align-right': wrapParagraph('<div align="right">', '</div>'); break;
+    case 'center-block': wrapParagraph('<div align="center">', '</div>'); break;
+    case 'undo': restoreMdHistory(mdHistory.index - 1); break;
+    case 'redo': restoreMdHistory(mdHistory.index + 1); break;
+    case 'find': toggleFindPanel(); break;
+    case 'table': openTableModal(); break;
+    case 'toc':
+      replaceEditorRange(ta.selectionStart, ta.selectionStart, '<!-- toc -->');
+      toast('已插入目录标记，主题需要支持目录（例如 toc 插件）。', 'ok');
+      break;
+    case 'snippets': toggleSnippetsPanel(); break;
+    default: break;
+  }
+}
+
+function applyInlineHtmlSetting() {
+  const on = $('md-inline-html').checked;
+  document.querySelectorAll('.md-html-tools').forEach(function (node) { node.hidden = !on; });
+  try { localStorage.setItem('admin.inlineHtml', on ? '1' : '0'); } catch (e) { /* 忽略 */ }
+}
+
+/* 查找替换 */
+
+function toggleFindPanel() {
+  const panel = $('md-find');
+  panel.hidden = !panel.hidden;
+  if (!panel.hidden) {
+    $('find-text').focus();
+    updateFindCount();
+  }
+}
+
+function findOccurrences(query) {
+  const value = editorTextarea().value;
+  const out = [];
+  if (!query) return out;
+  let at = value.indexOf(query, 0);
+  while (at !== -1) {
+    out.push(at);
+    at = value.indexOf(query, at + query.length);
+  }
+  return out;
+}
+
+function updateFindCount() {
+  const query = $('find-text').value;
+  const countEl = $('find-count');
+  if (!query) { countEl.textContent = ''; return; }
+  const total = findOccurrences(query).length;
+  countEl.textContent = total ? '共 ' + total + ' 处' : '没有匹配';
+}
+
+function jumpFind(backwards) {
+  const query = $('find-text').value;
+  if (!query) return;
+  const ta = editorTextarea();
+  const value = ta.value;
+  let idx;
+  if (backwards) {
+    idx = value.lastIndexOf(query, Math.max(0, ta.selectionStart - 1));
+    if (idx < 0) idx = value.lastIndexOf(query);
+  } else {
+    idx = value.indexOf(query, ta.selectionEnd);
+    if (idx < 0) idx = value.indexOf(query, 0);
+  }
+  if (idx < 0) { toast('没有找到匹配内容。', 'error'); return; }
+  ta.focus();
+  ta.setSelectionRange(idx, idx + query.length);
+  updateFindCount();
+}
+
+function replaceFindOne() {
+  const query = $('find-text').value;
+  if (!query) return;
+  const ta = editorTextarea();
+  const value = ta.value;
+  let idx = value.indexOf(query, ta.selectionStart);
+  if (idx < 0) idx = value.indexOf(query, 0);
+  if (idx < 0) { toast('没有找到匹配内容。', 'error'); return; }
+  replaceEditorRange(idx, idx + query.length, $('replace-text').value);
+  updateFindCount();
+}
+
+function replaceFindAll() {
+  const query = $('find-text').value;
+  if (!query) return;
+  const ta = editorTextarea();
+  const count = findOccurrences(query).length;
+  if (!count) { toast('没有找到匹配内容。', 'error'); return; }
+  const next = ta.value.split(query).join($('replace-text').value);
+  replaceEditorRange(0, ta.value.length, next, ta.selectionStart, ta.selectionEnd);
+  updateFindCount();
+  toast('已替换 ' + count + ' 处。', 'ok');
+}
+
+/* 片段库 */
+
+function buildSnippetsPanel() {
+  const panel = $('snippets-panel');
+  panel.textContent = '';
+  (window.MD_SNIPPETS || []).forEach(function (group) {
+    const box = el('div', 'snippets-group');
+    box.appendChild(el('h4', '', group.group));
+    const row = el('div', 'snippets-btns');
+    (group.items || []).forEach(function (item) {
+      const btn = el('button', '', item.label);
+      btn.type = 'button';
+      btn.addEventListener('click', function () { insertSnippet(item); });
+      row.appendChild(btn);
+    });
+    box.appendChild(row);
+    panel.appendChild(box);
+  });
+}
+
+function toggleSnippetsPanel() {
+  const panel = $('snippets-panel');
+  if (!panel.childElementCount) buildSnippetsPanel();
+  panel.hidden = !panel.hidden;
+  if (!panel.hidden) panel.scrollTop = 0;
+}
+
+function insertSnippet(item) {
+  const ta = editorTextarea();
+  const start = ta.selectionStart;
+  const end = ta.selectionEnd;
+  const text = String(item.text || '');
+  let selectStart = start + text.length;
+  let selectEnd = selectStart;
+  if (item.select && text.indexOf(item.select) >= 0) {
+    const at = text.indexOf(item.select);
+    selectStart = start + at;
+    selectEnd = selectStart + item.select.length;
+  }
+  replaceEditorRange(start, end, text, selectStart, selectEnd);
+  $('snippets-panel').hidden = true;
+  toast('已插入片段：' + item.label, 'ok');
+}
+
+/* 图片插入 */
+
+function openImageModal() {
+  $('image-file').value = '';
+  $('image-url').value = '';
+  $('image-alt').value = '';
+  $('image-hint').textContent = '';
+  $('image-hint').classList.remove('is-error');
+  $('image-modal').hidden = false;
+  $('image-url').focus();
+}
+
+function closeImageModal() { $('image-modal').hidden = true; }
+
+async function uploadImageFromEditor(file) {
+  if (!file) return;
+  const hint = $('image-hint');
+  hint.classList.remove('is-error');
+  hint.textContent = '正在上传到 OSS…';
+  try {
+    const dataUrl = await readFileBase64(file);
+    const data = await api('/oss/upload', {
+      method: 'POST',
+      csrf: true,
+      body: { name: file.name, type: file.type, data: dataUrl }
+    });
+    $('image-url').value = data.url || '';
+    if (!$('image-alt').value) $('image-alt').value = file.name.replace(/\.[^.]+$/, '');
+    hint.textContent = '已上传：' + (data.key || file.name);
+  } catch (err) {
+    hint.classList.add('is-error');
+    hint.textContent = '上传失败：' + err.message + '。可以直接填图片地址。';
+  }
+}
+
+function insertImageFromModal() {
+  const url = $('image-url').value.trim();
+  const hint = $('image-hint');
+  if (!url) {
+    hint.classList.add('is-error');
+    hint.textContent = '请先选择图片上传，或填写图片地址。';
+    return;
+  }
+  const alt = $('image-alt').value.trim();
+  const ta = editorTextarea();
+  const markdown = '![' + alt + '](' + url + ')';
+  replaceEditorRange(ta.selectionStart, ta.selectionEnd, markdown);
+  closeImageModal();
+  toast('已插入图片。', 'ok');
+}
+
+/* 表格插入 */
+
+function openTableModal() {
+  $('table-rows').value = '3';
+  $('table-cols').value = '3';
+  $('table-modal').hidden = false;
+  $('table-rows').focus();
+}
+
+function closeTableModal() { $('table-modal').hidden = true; }
+
+function insertTableFromModal() {
+  const rows = Math.max(1, Math.min(30, parseInt($('table-rows').value, 10) || 3));
+  const cols = Math.max(1, Math.min(12, parseInt($('table-cols').value, 10) || 3));
+  const header = [];
+  for (let c = 1; c <= cols; c++) header.push('列 ' + c);
+  let text = '| ' + header.join(' | ') + ' |\n| ' + new Array(cols).fill('---').join(' | ') + ' |';
+  for (let r = 1; r < rows; r++) {
+    text += '\n| ' + new Array(cols).fill('  ').join(' | ') + ' |';
+  }
+  const ta = editorTextarea();
+  replaceEditorRange(ta.selectionStart, ta.selectionEnd, '\n\n' + text + '\n\n');
+  closeTableModal();
+}
+
+/* 分屏拖动 */
+
+function setupSplitter() {
+  const panes = $('editor-panes');
+  const splitter = $('pane-splitter');
+  let dragging = false;
+  try {
+    const saved = parseFloat(localStorage.getItem('admin.editorSplit') || '');
+    if (saved >= 25 && saved <= 75) panes.style.setProperty('--split', saved + '%');
+  } catch (e) { /* 忽略 */ }
+
+  splitter.addEventListener('pointerdown', function (event) {
+    dragging = true;
+    splitter.classList.add('is-dragging');
+    try { splitter.setPointerCapture(event.pointerId); } catch (e) { /* 忽略 */ }
+    event.preventDefault();
+  });
+  splitter.addEventListener('pointermove', function (event) {
+    if (!dragging) return;
+    const rect = panes.getBoundingClientRect();
+    const percent = Math.max(25, Math.min(75, ((event.clientX - rect.left) / rect.width) * 100));
+    panes.style.setProperty('--split', percent.toFixed(1) + '%');
+  });
+  function stopDrag() {
+    if (!dragging) return;
+    dragging = false;
+    splitter.classList.remove('is-dragging');
+    const current = parseFloat(panes.style.getPropertyValue('--split')) || 50;
+    try { localStorage.setItem('admin.editorSplit', String(Math.round(current))); } catch (e) { /* 忽略 */ }
+  }
+  splitter.addEventListener('pointerup', stopDrag);
+  splitter.addEventListener('pointercancel', stopDrag);
+  splitter.addEventListener('dblclick', function () {
+    panes.style.removeProperty('--split');
+    try { localStorage.removeItem('admin.editorSplit'); } catch (e) { /* 忽略 */ }
+  });
+}
+
+function togglePreviewPane() {
+  setPane(state.pane === 'preview' ? 'split' : 'preview');
+}
+
+/* 工具栏绑定 */
+
+function bindEditorTools() {
+  $('md-toolbar').addEventListener('click', function (event) {
+    const btn = event.target.closest ? event.target.closest('button[data-md]') : null;
+    if (!btn) return;
+    handleMdCommand(btn.dataset.md);
+  });
+
+  $('md-heading').addEventListener('change', function () {
+    const level = parseInt(this.value, 10) || 0;
+    this.value = '0';
+    applyHeading(level);
+  });
+
+  $('md-color').addEventListener('change', function () {
+    wrapInlineStyle('color', this.value, '彩色文字');
+  });
+
+  $('md-size').addEventListener('change', function () {
+    if (!this.value) return;
+    const size = this.value;
+    this.value = '';
+    wrapInlineStyle('font-size', size, '大号文字');
+  });
+
+  $('md-inline-html').addEventListener('change', applyInlineHtmlSetting);
+  try {
+    const saved = localStorage.getItem('admin.inlineHtml');
+    if (saved === '0') $('md-inline-html').checked = false;
+  } catch (e) { /* 忽略 */ }
+  applyInlineHtmlSetting();
+
+  $('editor-body').addEventListener('input', pushMdHistory);
+  $('editor-body').addEventListener('keydown', function (event) {
+    const mod = event.ctrlKey || event.metaKey;
+    if (!mod) return;
+    const key = String(event.key || '').toLowerCase();
+    if (key === 'b') { event.preventDefault(); handleMdCommand('bold'); }
+    else if (key === 'i') { event.preventDefault(); handleMdCommand('italic'); }
+    else if (key === 'k') { event.preventDefault(); handleMdCommand('link'); }
+    else if (key === 'p' && event.shiftKey) { event.preventDefault(); togglePreviewPane(); }
+    else if (key === 'z' && event.shiftKey) { event.preventDefault(); handleMdCommand('redo'); }
+  });
+
+  $('find-text').addEventListener('input', updateFindCount);
+  $('find-next').addEventListener('click', function () { jumpFind(false); });
+  $('find-prev').addEventListener('click', function () { jumpFind(true); });
+  $('find-one').addEventListener('click', replaceFindOne);
+  $('find-all').addEventListener('click', replaceFindAll);
+  $('find-close').addEventListener('click', function () { $('md-find').hidden = true; });
+  $('find-text').addEventListener('keydown', function (event) {
+    if (event.key === 'Enter') { event.preventDefault(); jumpFind(event.shiftKey); }
+  });
+
+  $('image-file').addEventListener('change', function () {
+    uploadImageFromEditor(this.files && this.files[0]);
+  });
+  $('image-ok').addEventListener('click', insertImageFromModal);
+  $('image-cancel').addEventListener('click', closeImageModal);
+  document.querySelectorAll('[data-image-cancel]').forEach(function (node) {
+    node.addEventListener('click', closeImageModal);
+  });
+  $('table-ok').addEventListener('click', insertTableFromModal);
+  $('table-cancel').addEventListener('click', closeTableModal);
+  document.querySelectorAll('[data-table-cancel]').forEach(function (node) {
+    node.addEventListener('click', closeTableModal);
+  });
+
+  document.addEventListener('keydown', function (event) {
+    if (event.key !== 'Escape') return;
+    if (!$('image-modal').hidden) closeImageModal();
+    if (!$('table-modal').hidden) closeTableModal();
+    if (!$('snippets-panel').hidden) $('snippets-panel').hidden = true;
+  });
+
 }
 
 /* ---------------------------------------------------------------- 配置页 */
@@ -2386,6 +2974,42 @@ function bind() {
   document.querySelectorAll('.seg-btn').forEach(function (btn) {
     btn.addEventListener('click', function () { setPane(btn.dataset.pane); });
   });
+
+  // 导入 .md（按钮 + 拖入）
+  $('editor-import-md').addEventListener('click', function () { $('import-file').click(); });
+  $('import-file').addEventListener('change', function () {
+    const file = this.files && this.files[0];
+    this.value = '';
+    importMarkdownFile(file);
+  });
+  const paneEdit = document.querySelector('.pane-edit');
+  const dropHint = $('editor-drop');
+  paneEdit.addEventListener('dragover', function (event) {
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+    dropHint.hidden = false;
+  });
+  paneEdit.addEventListener('dragleave', function (event) {
+    if (!paneEdit.contains(event.relatedTarget)) dropHint.hidden = true;
+  });
+  paneEdit.addEventListener('drop', function (event) {
+    event.preventDefault();
+    dropHint.hidden = true;
+    const file = event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files[0];
+    if (file) importMarkdownFile(file);
+  });
+
+  // 网页导入
+  $('editor-import-url').addEventListener('click', openUrlModal);
+  $('url-ok').addEventListener('click', submitUrlImport);
+  $('url-cancel').addEventListener('click', closeUrlModal);
+  document.querySelectorAll('[data-url-cancel]').forEach(function (node) {
+    node.addEventListener('click', closeUrlModal);
+  });
+  $('url-input').addEventListener('keydown', function (event) {
+    if (event.key === 'Enter') { event.preventDefault(); submitUrlImport(); }
+    if (event.key === 'Escape') closeUrlModal();
+  });
   // 输入法组字期间不触发预览，避免半成品闪烁
   let composing = false;
   $('editor-body').addEventListener('compositionstart', function () { composing = true; });
@@ -2610,6 +3234,8 @@ function bind() {
     event.preventDefault();
     event.returnValue = '';
   });
+
+  bindEditorTools();
 }
 
 boot();

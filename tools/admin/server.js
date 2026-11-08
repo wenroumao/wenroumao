@@ -27,6 +27,7 @@ const STATIC_FILES = {
   '': { file: 'index.html', type: 'text/html; charset=utf-8' },
   '/': { file: 'index.html', type: 'text/html; charset=utf-8' },
   '/app.js': { file: 'app.js', type: 'text/javascript; charset=utf-8' },
+  '/snippets.js': { file: 'snippets.js', type: 'text/javascript; charset=utf-8' },
   '/style.css': { file: 'style.css', type: 'text/css; charset=utf-8' },
   '/preview': { file: 'preview.html', type: 'text/html; charset=utf-8', frameable: true },
   '/preview.html': { file: 'preview.html', type: 'text/html; charset=utf-8', frameable: true },
