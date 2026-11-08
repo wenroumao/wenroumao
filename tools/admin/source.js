@@ -28,8 +28,8 @@ const COMMIT_NAME = 'wenroumao';
 const COMMIT_EMAIL = 'admin@local';
 
 /** 这些路径永远不进源码提交（与 .gitignore 一致，但代码里再挡一次）。 */
-const EXCLUDED_EXACT = ['.admin-auth', '.admin-deploy.json'];
-const EXCLUDED_PREFIX = ['bak/', 'public/', '.deploy_git/', '.deploy_git', 'node_modules/', '.git/'];
+const EXCLUDED_EXACT = ['.admin-auth', '.admin-deploy.json', '.admin-oss.json'];
+const EXCLUDED_PREFIX = ['bak/', 'public/', '.deploy_git/', '.deploy_git', 'node_modules/', '.git/', '.admin-oss.json.tmp-'];
 
 function sourceError(code, message, raw) {
   const err = new Error(message);

@@ -12,6 +12,8 @@ themes/fomalhaut/.git
 .admin-auth
 .admin-deploy.json
 .admin-deploy.json.tmp-*
+.admin-oss.json
+.admin-oss.json.tmp-*
 
 # ===== 2026-10-04 追加：本地调试残留与备份，不进仓库 =====
 # DSH 调试会话产生的临时文件、日志、浏览器 profile

@@ -30,7 +30,12 @@ const state = {
   history: { items: [], paths: [], path: '', action: '' },
   source: { info: null, offset: 0, hasMore: false, busy: false },
   package: { modes: [], last: null, selected: 'full', busy: false },
-  ssh: { info: null, busy: false }
+  ssh: { info: null, busy: false },
+  oss: {
+    info: null, busy: false, results: [], queue: 0, done: 0,
+    objects: [], selection: {}, nextMarker: '', hasMore: false,
+    listBusy: false, deleteBusy: false, domain: null, search: ''
+  }
 };
 
 function $(id) { return document.getElementById(id); }
@@ -180,6 +185,7 @@ const VIEW_META = {
   source: { kicker: 'Source', title: '源码' },
   package: { kicker: 'Package', title: '一键打包' },
   ssh: { kicker: 'SSH', title: 'SSH 密钥' },
+  oss: { kicker: 'Image host', title: '图床' },
   publish: { kicker: 'Publish', title: '生成与推送' }
 };
 
@@ -194,7 +200,7 @@ async function switchView(name, force) {
     state.dirty = false;
     updateDirtyUI();
   }
-  ['posts', 'editor', 'config', 'features', 'history', 'source', 'package', 'ssh', 'publish'].forEach(function (view) {
+  ['posts', 'editor', 'config', 'features', 'history', 'source', 'package', 'ssh', 'oss', 'publish'].forEach(function (view) {
     $('view-' + view).hidden = view !== name;
   });
   document.querySelectorAll('.nav-item').forEach(function (btn) {
@@ -212,6 +218,7 @@ async function switchView(name, force) {
   if (name === 'source') loadSource();
   if (name === 'package') loadPackage();
   if (name === 'ssh') loadSsh();
+  if (name === 'oss') loadOss();
   if (name === 'publish') loadPublish();
 }
 
@@ -749,6 +756,555 @@ async function regenerateFromFeatures() {
   if (!ok) return;
   switchView('publish', true);
   startJob(false);
+}
+
+/* ------------------------------------------------------------ 图床（OSS） */
+
+const OSS_FIELD_LABELS = {
+  accessKeyId: 'AccessKeyId',
+  accessKeySecret: 'AccessKeySecret',
+  bucket: 'Bucket',
+  region: 'Region',
+  customDomain: '自定义域名',
+  pathPrefix: '路径前缀'
+};
+
+function ossBadge(info) {
+  const badge = $('oss-state');
+  const configured = !!(info && info.configured);
+  badge.textContent = configured ? '已配置' : '未配置';
+  badge.className = 'badge ' + (configured ? 'badge-ok' : 'badge-warn');
+}
+
+function fillOssConfig(info) {
+  const config = (info && info.config) || {};
+  $('oss-access-key-id').value = config.accessKeyId || '';
+  $('oss-secret').value = '';
+  $('oss-bucket').value = config.bucket || '';
+  $('oss-region').value = config.region || '';
+  $('oss-domain').value = config.customDomain || '';
+  $('oss-prefix').value = config.pathPrefix || '';
+
+  const overridden = Object.keys(info && info.overrides || {}).filter(function (field) {
+    return info.overrides[field];
+  }).map(function (field) {
+    return OSS_FIELD_LABELS[field] || field;
+  });
+  const parts = [];
+  parts.push(config.hasSecret ? 'Secret 已保存（留空可保留原值）' : 'Secret 未配置');
+  if (overridden.length) parts.push('环境变量覆盖：' + overridden.join('、'));
+  if (!info || !info.configured) parts.push('还需要填写 AccessKeyId / Secret / Bucket / Region');
+  $('oss-config-note').textContent = parts.join('；');
+  ossBadge(info);
+}
+
+function renderOssResults() {
+  const box = $('oss-results');
+  box.textContent = '';
+  if (!state.oss.results.length) {
+    box.hidden = true;
+    return;
+  }
+  box.hidden = false;
+  state.oss.results.forEach(function (item) {
+    const wrap = el('div', 'oss-item');
+    const img = el('img', 'oss-thumb');
+    img.src = item.url;
+    img.alt = item.name || '图片';
+    img.loading = 'lazy';
+
+    const meta = el('div', 'oss-meta');
+    meta.appendChild(el('strong', '', item.name || '图片'));
+    meta.appendChild(el('span', 'oss-sub', formatBytes(item.bytes) + ' · ' + item.key));
+
+    const actions = el('div', 'copy-row');
+    [['复制 URL', item.url], ['复制 Markdown', item.markdown], ['复制 HTML', item.html]].forEach(function (row) {
+      const btn = el('button', 'ghost-btn', row[0]);
+      btn.type = 'button';
+      btn.dataset.copy = row[1];
+      actions.appendChild(btn);
+    });
+    const insert = el('button', 'btn btn-small', '插入文章');
+    insert.type = 'button';
+    insert.dataset.insert = item.markdown;
+    actions.appendChild(insert);
+    meta.appendChild(actions);
+    meta.appendChild(el('code', 'oss-url', item.url));
+
+    wrap.appendChild(img);
+    wrap.appendChild(meta);
+    box.appendChild(wrap);
+  });
+}
+
+function ossBaseName(key) {
+  return String(key || '').split('/').pop() || key;
+}
+
+function formatOssTime(value) {
+  if (!value) return '未知时间';
+  const date = new Date(value);
+  if (isNaN(date.getTime())) return String(value);
+  function p(n) { return String(n).padStart(2, '0'); }
+  return date.getFullYear() + '-' + p(date.getMonth() + 1) + '-' + p(date.getDate()) +
+    ' ' + p(date.getHours()) + ':' + p(date.getMinutes());
+}
+
+function renderOssDomain(domain) {
+  const box = $('oss-domain-warn');
+  if (!domain || !domain.customDomain || domain.ok) {
+    box.hidden = true;
+    box.textContent = '';
+    return;
+  }
+  box.hidden = false;
+  box.className = 'oss-domain-warn is-warn';
+  box.textContent = '当前自定义域名不可用：' + domain.message +
+    (domain.defaultDomain ? '（已改用 ' + domain.defaultDomain + '）' : '');
+}
+
+function updateOssSelection() {
+  const count = Object.keys(state.oss.selection).length;
+  $('oss-selected-count').textContent = '（' + count + '）';
+  $('btn-oss-delete-selected').disabled = count === 0 || state.oss.deleteBusy;
+}
+
+function renderOssGrid() {
+  const grid = $('oss-grid');
+  grid.textContent = '';
+  const all = state.oss.objects;
+  const query = state.oss.search;
+  const rows = query
+    ? all.filter(function (item) { return item.key.toLowerCase().indexOf(query) >= 0; })
+    : all;
+
+  const empty = $('oss-empty');
+  const showEmpty = rows.length === 0 && !state.oss.listBusy;
+  empty.hidden = !showEmpty;
+  if (showEmpty) {
+    const strong = empty.querySelector('strong');
+    const span = empty.querySelector('span');
+    if (query) {
+      strong.textContent = '没有匹配「' + state.oss.search + '」的图片';
+      span.textContent = '搜索只过滤已经加载的图片；可以点「加载更多」继续往后找。';
+    } else {
+      strong.textContent = '这个 Bucket 里还没有图片';
+      span.textContent = '可以先用上面的上传区传一张，或检查路径前缀 / 自定义域名配置。';
+    }
+  }
+
+  rows.forEach(function (item) {
+    const name = ossBaseName(item.key);
+    const card = el('article', 'oss-card');
+    card.dataset.key = item.key;
+
+    const pick = el('label', 'oss-pick');
+    const checkbox = el('input', '');
+    checkbox.type = 'checkbox';
+    checkbox.checked = !!state.oss.selection[item.key];
+    checkbox.dataset.ossSelect = item.key;
+    checkbox.setAttribute('aria-label', '选择 ' + name);
+    pick.appendChild(checkbox);
+    card.appendChild(pick);
+
+    const previewBtn = el('button', 'oss-preview');
+    previewBtn.type = 'button';
+    previewBtn.dataset.ossPreview = item.url;
+    previewBtn.dataset.ossPreviewName = name;
+    const img = el('img', 'oss-grid-thumb');
+    img.src = item.url;
+    img.alt = name;
+    img.loading = 'lazy';
+    img.onerror = function () {
+      if (img.dataset.fallback || !item.defaultUrl || img.src === item.defaultUrl) return;
+      img.dataset.fallback = '1';
+      img.src = item.defaultUrl;
+    };
+    previewBtn.appendChild(img);
+    card.appendChild(previewBtn);
+
+    const body = el('div', 'oss-card-body');
+    body.appendChild(el('strong', 'oss-card-name', name));
+    body.appendChild(el('span', 'oss-sub', formatBytes(item.size) + ' · ' + formatOssTime(item.lastModified)));
+    body.appendChild(el('code', 'oss-sub', item.key));
+
+    const actions = el('div', 'oss-card-actions');
+    const copyMd = el('button', 'ghost-btn', '复制 Markdown');
+    copyMd.type = 'button';
+    copyMd.dataset.ossCopy = item.markdown;
+    const copyUrl = el('button', 'ghost-btn', '复制 URL');
+    copyUrl.type = 'button';
+    copyUrl.dataset.ossCopy = item.url;
+    const view = el('button', 'ghost-btn', '预览');
+    view.type = 'button';
+    view.dataset.ossPreview = item.url;
+    view.dataset.ossPreviewName = name;
+    const del = el('button', 'ghost-btn ghost-danger', '删除');
+    del.type = 'button';
+    del.dataset.ossDelete = item.key;
+    actions.appendChild(copyMd);
+    actions.appendChild(copyUrl);
+    actions.appendChild(view);
+    actions.appendChild(del);
+    body.appendChild(actions);
+    card.appendChild(body);
+    grid.appendChild(card);
+  });
+
+  $('btn-oss-more').hidden = !state.oss.hasMore;
+  updateOssSelection();
+}
+
+async function loadOssObjects(reset) {
+  if (state.oss.listBusy) return;
+  const info = state.oss.info;
+  if (!info || !info.configured) {
+    state.oss.objects = [];
+    state.oss.hasMore = false;
+    state.oss.nextMarker = '';
+    state.oss.selection = {};
+    renderOssGrid();
+    $('oss-manager-state').textContent = '保存 OSS 配置后，这里会列出 Bucket 里的全部图片。';
+    $('btn-oss-more').hidden = true;
+    return;
+  }
+
+  if (reset) {
+    state.oss.objects = [];
+    state.oss.selection = {};
+    state.oss.nextMarker = '';
+    state.oss.hasMore = false;
+    renderOssGrid();
+  }
+
+  state.oss.listBusy = true;
+  const stateText = $('oss-manager-state');
+  stateText.textContent = reset ? '正在读取 OSS 资源…' : '正在加载更多…';
+  $('btn-oss-refresh').disabled = true;
+  try {
+    const marker = reset ? '' : state.oss.nextMarker;
+    const data = await api('/oss/objects?limit=48' +
+      (marker ? '&marker=' + encodeURIComponent(marker) : ''));
+    state.oss.objects = reset ? data.items : state.oss.objects.concat(data.items);
+    state.oss.nextMarker = data.nextMarker || '';
+    state.oss.hasMore = !!data.hasMore;
+    state.oss.domain = data.domain || null;
+    renderOssDomain(state.oss.domain);
+    renderOssGrid();
+    const total = data.total == null ? state.oss.objects.length + ' 张已加载' : '共 ' + data.total + ' 张';
+    stateText.textContent = data.items.length
+      ? total + '；点图片可预览大图，勾选后可批量删除。'
+      : (reset ? '没有找到图片。' : '已经到底了。');
+  } catch (err) {
+    if (err.status !== 401) {
+      stateText.textContent = '读取资源失败：' + ossFailureText(err);
+      toast('读取 OSS 资源失败', 'error');
+    }
+  } finally {
+    state.oss.listBusy = false;
+    $('btn-oss-refresh').disabled = false;
+    $('btn-oss-more').hidden = !state.oss.hasMore;
+    renderOssGrid();
+  }
+}
+
+async function deleteOssKeys(keys) {
+  const list = (keys || []).filter(Boolean);
+  if (!list.length) return;
+  if (!state.oss.info || !state.oss.info.configured) {
+    toast('请先保存 OSS 配置，再删除图片。', 'error');
+    return;
+  }
+  if (state.oss.deleteBusy) return;
+
+  const preview = list.slice(0, 10).map(function (key) {
+    return '<li>' + escapeHtml(ossBaseName(key)) + '</li>';
+  }).join('');
+  const more = list.length > 10 ? '<li>……等 ' + list.length + ' 个文件</li>' : '';
+  const ok = await confirmModal({
+    title: '确认删除 ' + list.length + ' 个图片？',
+    html: '<p>将从 OSS 永久删除以下文件：</p>' +
+      '<ul class="confirm-list">' + preview + more + '</ul>' +
+      '<p class="danger-note">删除后文章里引用这些图片会导致裂图，且 OSS 没有回收站。请确认这些图片不再需要。</p>',
+    confirmText: '确认删除'
+  });
+  if (!ok) return;
+
+  state.oss.deleteBusy = true;
+  updateOssSelection();
+  const resultBox = $('oss-delete-result');
+  resultBox.hidden = false;
+  resultBox.className = 'restore-result';
+  resultBox.textContent = '正在删除 ' + list.length + ' 个文件…';
+  try {
+    const data = await api('/oss/delete', { method: 'POST', csrf: true, body: { keys: list } });
+    const deleted = [];
+    const failures = [];
+    (data.results || []).forEach(function (item) {
+      if (item.ok) deleted.push(item.key);
+      else failures.push(item);
+    });
+
+    const gone = {};
+    deleted.forEach(function (key) {
+      gone[key] = true;
+      delete state.oss.selection[key];
+    });
+    state.oss.objects = state.oss.objects.filter(function (item) { return !gone[item.key]; });
+    renderOssGrid();
+
+    if (failures.length) {
+      resultBox.className = 'restore-result is-warn';
+      resultBox.textContent = '已删除 ' + deleted.length + ' 个，失败 ' + failures.length + ' 个：\n' +
+        failures.map(function (item) {
+          return '✗ ' + item.key + '：' + (item.label || '删除失败') +
+            '（' + (item.code || 'UNKNOWN') + (item.ossCode ? ' / ' + item.ossCode : '') + '）' +
+            (item.message ? ' — ' + item.message : '') +
+            (item.remoteMessage && item.remoteMessage !== item.message ? ' OSS：' + item.remoteMessage : '');
+        }).join('\n');
+    } else {
+      resultBox.className = 'restore-result is-ok';
+      resultBox.textContent = '✓ 已删除 ' + deleted.length + ' 个图片。';
+    }
+
+    if (deleted.length && failures.length) toast('部分删除成功，失败原因见列表', 'error');
+    else if (deleted.length) toast('已删除 ' + deleted.length + ' 个图片', 'ok');
+    else toast('删除失败，原因见列表', 'error');
+
+    // 当前页被删空但 OSS 里还有下一页时，自动补一页，避免误显示“Bucket 里没有图片”。
+    if (deleted.length && state.oss.objects.length === 0 && state.oss.hasMore) {
+      loadOssObjects(false);
+    }
+  } catch (err) {
+    resultBox.className = 'restore-result is-warn';
+    resultBox.textContent = '✗ ' + ossFailureText(err);
+    toast('删除失败', 'error');
+  } finally {
+    state.oss.deleteBusy = false;
+    updateOssSelection();
+  }
+}
+
+function openOssLightbox(url, name) {
+  const box = $('oss-lightbox');
+  const img = $('oss-lightbox-img');
+  img.src = url;
+  img.alt = name || '图片预览';
+  box.hidden = false;
+  $('oss-lightbox-close').focus();
+}
+
+function closeOssLightbox() {
+  const box = $('oss-lightbox');
+  if (box.hidden) return;
+  box.hidden = true;
+  $('oss-lightbox-img').src = '';
+}
+
+async function loadOss() {
+  try {
+    const info = await api('/oss/config');
+    state.oss.info = info;
+    fillOssConfig(info);
+    renderOssResults();
+    await loadOssObjects(true);
+  } catch (err) {
+    if (err.status !== 401) {
+      toast('读取图床配置失败：' + err.message, 'error');
+      $('oss-config-note').textContent = err.message;
+    }
+  }
+}
+
+async function saveOss() {
+  const btn = $('btn-oss-save');
+  btn.disabled = true;
+  btn.textContent = '正在保存…';
+  const payload = {
+    accessKeyId: $('oss-access-key-id').value.trim(),
+    bucket: $('oss-bucket').value.trim(),
+    region: $('oss-region').value.trim(),
+    customDomain: $('oss-domain').value.trim(),
+    pathPrefix: $('oss-prefix').value.trim()
+  };
+  const secret = $('oss-secret').value.trim();
+  if (secret) payload.accessKeySecret = secret;
+  try {
+    const info = await api('/oss/config', { method: 'PUT', csrf: true, body: payload });
+    state.oss.info = info;
+    fillOssConfig(info);
+    toast(info.configured ? '图床配置已保存' : '已保存，但还缺少必填项', info.configured ? 'ok' : 'error');
+  } catch (err) {
+    const detail = err.body && err.body.error;
+    const message = detail && detail.label ? detail.label + '：' + detail.message : err.message;
+    toast('保存失败：' + message, 'error');
+    $('oss-config-note').textContent = message + (detail && detail.hint ? '（' + detail.hint + '）' : '');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '保存配置';
+  }
+}
+
+function ossFailureText(err) {
+  const detail = err && err.body && err.body.error;
+  if (!detail) return (err && err.message) || '图床操作失败。';
+  return (detail.label ? detail.label + '：' : '') + (detail.message || '') +
+    (detail.hint ? '\n' + detail.hint : '');
+}
+
+async function testOss() {
+  const btn = $('btn-oss-test');
+  const box = $('oss-test-result');
+  btn.disabled = true;
+  btn.textContent = '正在测试…';
+  box.hidden = false;
+  box.className = 'restore-result';
+  box.textContent = '正在上传一张 1×1 测试图，成功后会自动删除…';
+  try {
+    const data = await api('/oss/test', { method: 'POST', csrf: true, body: {} });
+    box.textContent = '✓ ' + data.message + (data.note ? '\n' + data.note : '') +
+      (data.key ? '\n测试对象：' + data.key : '');
+    box.className = 'restore-result is-ok';
+    toast('图床连通性正常', 'ok');
+  } catch (err) {
+    const text = ossFailureText(err);
+    box.textContent = '✗ ' + text;
+    box.className = 'restore-result is-warn';
+    toast('连通性测试失败', 'error');
+  } finally {
+    state.oss.busy = false;
+    btn.disabled = false;
+    btn.textContent = '测试连通性';
+  }
+}
+
+function readFileBase64(file) {
+  return new Promise(function (resolve, reject) {
+    const reader = new FileReader();
+    reader.onload = function () { resolve(String(reader.result || '')); };
+    reader.onerror = function () { reject(new Error('读取文件失败')); };
+    reader.readAsDataURL(file);
+  });
+}
+
+function uploadOssFile(file, index, total) {
+  return new Promise(function (resolve, reject) {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', API + '/oss/upload');
+    xhr.withCredentials = true;
+    xhr.setRequestHeader('Content-Type', 'application/json');
+    if (state.session && state.session.csrf) xhr.setRequestHeader('X-CSRF-Token', state.session.csrf);
+
+    xhr.upload.onprogress = function (event) {
+      if (!event.lengthComputable) return;
+      const percent = Math.round((event.loaded / event.total) * 100);
+      showOssProgress('第 ' + (index + 1) + ' / ' + total + ' 张 · ' + percent + '%', percent);
+    };
+    xhr.onload = function () {
+      let data = {};
+      try { data = JSON.parse(xhr.responseText || '{}'); } catch (e) { data = {}; }
+      if (xhr.status >= 200 && xhr.status < 300) return resolve(data);
+      const err = new Error((data.error && data.error.message) || ('上传失败：' + xhr.status));
+      err.status = xhr.status;
+      err.body = data;
+      reject(err);
+    };
+    xhr.onerror = function () { reject(new Error('网络中断，上传失败。')); };
+    xhr.onabort = function () { reject(new Error('上传已取消。')); };
+
+    readFileBase64(file).then(function (base64) {
+      xhr.send(JSON.stringify({ name: file.name, type: file.type, data: base64 }));
+    }).catch(reject);
+  });
+}
+
+function showOssProgress(text, percent) {
+  const bar = $('oss-progress');
+  const fill = $('oss-progress-bar');
+  const label = $('oss-progress-text');
+  bar.hidden = false;
+  fill.style.width = Math.max(0, Math.min(100, percent || 0)) + '%';
+  label.textContent = text || '';
+}
+
+function hideOssProgress() {
+  $('oss-progress').hidden = true;
+  $('oss-progress-bar').style.width = '0%';
+  $('oss-progress-text').textContent = '';
+}
+
+async function handleOssFiles(fileList) {
+  const files = Array.prototype.slice.call(fileList || []);
+  if (!files.length) return;
+  if (!state.oss.info || !state.oss.info.configured) {
+    toast('请先保存 OSS 配置，再上传图片。', 'error');
+    return;
+  }
+  if (state.oss.busy) return toast('正在上传，请等当前批次完成。', 'error');
+
+  const valid = [];
+  files.forEach(function (file) {
+    const type = String(file.type || '').toLowerCase();
+    if (!/^image\/(jpeg|png|gif|webp|avif|bmp|tiff)$/.test(type)) {
+      toast(file.name + ' 不是支持的图片格式（SVG 已禁用）。', 'error');
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      toast(file.name + ' 超过 10 MB，已跳过。', 'error');
+      return;
+    }
+    valid.push(file);
+  });
+  if (!valid.length) return;
+
+  state.oss.busy = true;
+  const hint = $('oss-upload-hint');
+  hint.textContent = '正在上传 ' + valid.length + ' 张图片……';
+  let uploaded = 0;
+  try {
+    for (let i = 0; i < valid.length; i++) {
+      showOssProgress('第 ' + (i + 1) + ' / ' + valid.length + ' 张 · 读取中', 0);
+      try {
+        const result = await uploadOssFile(valid[i], i, valid.length);
+        uploaded += 1;
+        state.oss.results.unshift(result);
+        renderOssResults();
+        if (result.domain) renderOssDomain(result.domain);
+      } catch (err) {
+        toast(valid[i].name + '：' + ossFailureText(err), 'error');
+      }
+    }
+    hint.textContent = '上传结束。可复制链接，或在编辑页打开文章后点「插入文章」。';
+  } finally {
+    state.oss.busy = false;
+    hideOssProgress();
+    if (uploaded) loadOssObjects(true);
+  }
+}
+
+function insertMarkdownIntoEditor(markdown) {
+  if (!state.editing) {
+    toast('请先在「文章」页打开一篇文章，再插入图片。', 'error');
+    return;
+  }
+  const textarea = $('editor-body');
+  const editorVisible = !$('view-editor').hidden;
+  const length = textarea.value.length;
+  const position = editorVisible ? (textarea.selectionStart == null ? length : textarea.selectionStart) : length;
+
+  const before = textarea.value.slice(0, position);
+  const after = textarea.value.slice(position);
+  const lead = before && !/\n$/.test(before) ? '\n\n' : '';
+  const tail = after && !/^\n/.test(after) ? '\n' : '';
+  textarea.value = before + lead + markdown + tail + after;
+  const caret = (before + lead + markdown).length;
+  textarea.setSelectionRange(caret, caret);
+
+  state.dirty = true;
+  updateDirtyUI();
+  updateStats();
+  schedulePreview(true);
+  toast('已插入到当前文章（' + (editorVisible ? '光标处' : '文末') + '）', 'ok');
 }
 
 /* ------------------------------------------------------------ 生成与推送 */
@@ -1932,6 +2488,99 @@ function bind() {
     });
   });
 
+  // 图床
+  $('btn-oss-save').addEventListener('click', saveOss);
+  $('btn-oss-test').addEventListener('click', testOss);
+
+  const dropzone = $('oss-dropzone');
+  const fileInput = $('oss-file');
+  dropzone.addEventListener('click', function (event) {
+    // 程序化点击 input 时事件会冒泡回 dropzone，这里要停住，避免无限触发。
+    if (event.target === fileInput) return;
+    fileInput.click();
+  });
+  dropzone.addEventListener('keydown', function (event) {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      fileInput.click();
+    }
+  });
+  ['dragenter', 'dragover'].forEach(function (name) {
+    dropzone.addEventListener(name, function (event) {
+      event.preventDefault();
+      dropzone.classList.add('is-over');
+    });
+  });
+  ['dragleave', 'dragend'].forEach(function (name) {
+    dropzone.addEventListener(name, function (event) {
+      event.preventDefault();
+      dropzone.classList.remove('is-over');
+    });
+  });
+  dropzone.addEventListener('drop', function (event) {
+    event.preventDefault();
+    dropzone.classList.remove('is-over');
+    handleOssFiles(event.dataTransfer && event.dataTransfer.files);
+  });
+  fileInput.addEventListener('change', function () {
+    handleOssFiles(fileInput.files);
+    fileInput.value = '';
+  });
+
+  $('oss-results').addEventListener('click', function (event) {
+    const btn = event.target.closest('[data-copy],[data-insert]');
+    if (!btn) return;
+    if (btn.dataset.insert) {
+      insertMarkdownIntoEditor(btn.dataset.insert);
+      return;
+    }
+    copyText(btn.dataset.copy).then(function (ok) {
+      toast(ok ? '已复制' : '复制失败，请手动选择文本', ok ? 'ok' : 'error');
+    });
+  });
+
+  // 图床资源管理器
+  $('oss-search').addEventListener('input', function () {
+    state.oss.search = $('oss-search').value.trim().toLowerCase();
+    renderOssGrid();
+  });
+  $('btn-oss-refresh').addEventListener('click', function () {
+    loadOssObjects(true);
+  });
+  $('btn-oss-more').addEventListener('click', function () {
+    loadOssObjects(false);
+  });
+  $('btn-oss-delete-selected').addEventListener('click', function () {
+    deleteOssKeys(Object.keys(state.oss.selection));
+  });
+  $('oss-grid').addEventListener('change', function (event) {
+    const box = event.target.closest('[data-oss-select]');
+    if (!box) return;
+    if (box.checked) state.oss.selection[box.dataset.ossSelect] = true;
+    else delete state.oss.selection[box.dataset.ossSelect];
+    updateOssSelection();
+  });
+  $('oss-grid').addEventListener('click', function (event) {
+    const copy = event.target.closest('[data-oss-copy]');
+    if (copy) {
+      copyText(copy.dataset.ossCopy).then(function (ok) {
+        toast(ok ? '已复制' : '复制失败，请手动选择文本', ok ? 'ok' : 'error');
+      });
+      return;
+    }
+    const preview = event.target.closest('[data-oss-preview]');
+    if (preview) {
+      openOssLightbox(preview.dataset.ossPreview, preview.dataset.ossPreviewName);
+      return;
+    }
+    const del = event.target.closest('[data-oss-delete]');
+    if (del) deleteOssKeys([del.dataset.ossDelete]);
+  });
+  $('oss-lightbox-close').addEventListener('click', closeOssLightbox);
+  $('oss-lightbox').addEventListener('click', function (event) {
+    if (event.target === $('oss-lightbox')) closeOssLightbox();
+  });
+
   // 弹窗
   $('modal-ok').addEventListener('click', function () { closeModal(true); });
   $('modal-cancel').addEventListener('click', function () { closeModal(false); });
@@ -1940,6 +2589,10 @@ function bind() {
   });
 
   document.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape' && !$('oss-lightbox').hidden) {
+      closeOssLightbox();
+      return;
+    }
     if (event.key === 'Escape' && !$('modal').hidden) {
       closeModal(false);
       return;

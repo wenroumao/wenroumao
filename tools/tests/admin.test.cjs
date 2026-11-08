@@ -17,6 +17,7 @@ const deploy = require('../admin/deploy.js');
 const createAdminServer = require('../admin/server.js');
 const packager = require('../admin/package.js');
 const ssh = require('../admin/ssh.js');
+const oss = require('../admin/oss.js');
 const source = require('../admin/source.js');
 const crypto = require('crypto');
 
@@ -1623,5 +1624,459 @@ test('SSH 测试：接口返回分类结果，缺 CSRF 被拒', async function (
   } finally {
     await srv.close();
     cleanup(home);
+  }
+});
+
+/* ------------------------------------------------------------ 图床（OSS） */
+
+const OSS_PNG_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+
+function makeOssDir() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'fomalhaut-oss-'));
+}
+
+test('图床：配置写入后 GET 不回显 secret，留空保留原值', async function () {
+  const dir = makeOssDir();
+  const srv = await startServer(dir, null, { ossOptions: { env: {} } });
+  try {
+    const auth = await login(srv.base);
+    const initial = await call(srv.base, '/admin/api/oss/config', { cookie: auth.cookie });
+    assert.equal(initial.status, 200);
+    assert.equal(initial.json.configured, false);
+    assert.equal(initial.json.config.hasSecret, false);
+    assert.match(initial.json.note, /AccessKeySecret/);
+
+    // 未配置时上传给出明确错误，不是 500
+    const denied = await call(srv.base, '/admin/api/oss/upload', {
+      method: 'POST', cookie: auth.cookie, csrf: auth.csrf,
+      body: { name: 'a.png', type: 'image/png', data: OSS_PNG_BASE64 }
+    });
+    assert.equal(denied.status, 400);
+    assert.equal(denied.json.error.code, 'OSS_NOT_CONFIGURED');
+    assert.match(denied.json.error.message, /AccessKeyId/);
+
+    const saved = await call(srv.base, '/admin/api/oss/config', {
+      method: 'PUT', cookie: auth.cookie, csrf: auth.csrf,
+      body: {
+        accessKeyId: 'TEST-AK', accessKeySecret: 'TEST-SECRET-SENTINEL',
+        bucket: 'demo-bucket', region: 'oss-cn-hangzhou',
+        pathPrefix: 'blog/2026/11/', customDomain: 'https://img.example.com/'
+      }
+    });
+    assert.equal(saved.status, 200);
+    assert.equal(saved.json.configured, true);
+    assert.equal(saved.json.config.hasSecret, true);
+    assert.equal(saved.json.config.pathPrefix, 'blog/2026/11');
+    assert.equal(saved.json.config.customDomain, 'https://img.example.com');
+    assert.ok(!JSON.stringify(saved.json).includes('TEST-SECRET-SENTINEL'));
+
+    const file = path.join(dir, '.admin-oss.json');
+    assert.ok(fs.existsSync(file));
+    assert.match(fs.readFileSync(file, 'utf8'), /TEST-SECRET-SENTINEL/);
+
+    // secret 留空表示保留原值
+    const kept = await call(srv.base, '/admin/api/oss/config', {
+      method: 'PUT', cookie: auth.cookie, csrf: auth.csrf,
+      body: { accessKeyId: 'TEST-AK-2', accessKeySecret: '', bucket: 'demo-bucket', region: 'oss-cn-hangzhou' }
+    });
+    assert.equal(kept.status, 200);
+    assert.equal(kept.json.config.accessKeyId, 'TEST-AK-2');
+    assert.equal(kept.json.config.hasSecret, true);
+    assert.match(fs.readFileSync(file, 'utf8'), /TEST-SECRET-SENTINEL/);
+
+    const reread = await call(srv.base, '/admin/api/oss/config', { cookie: auth.cookie });
+    assert.equal(reread.status, 200);
+    assert.equal(reread.json.config.hasSecret, true);
+    assert.ok(!JSON.stringify(reread.json).includes('TEST-SECRET-SENTINEL'));
+
+    // 缺 CSRF：写接口必须被拒
+    const noCsrf = await call(srv.base, '/admin/api/oss/config', {
+      method: 'PUT', cookie: auth.cookie,
+      body: { accessKeyId: 'x', bucket: 'x', region: 'oss-cn-hangzhou' }
+    });
+    assert.equal(noCsrf.status, 403);
+  } finally {
+    await srv.close();
+    cleanup(dir);
+  }
+});
+
+test('图床：环境变量覆盖本地配置，且仍然不回显 secret', async function () {
+  const dir = makeOssDir();
+  fs.writeFileSync(path.join(dir, '.admin-oss.json'), JSON.stringify({
+    accessKeyId: 'FILE-AK',
+    accessKeySecret: 'FILE-SECRET-SENTINEL',
+    bucket: 'file-bucket',
+    region: 'oss-cn-shanghai'
+  }), 'utf8');
+  const srv = await startServer(dir, null, {
+    ossOptions: {
+      env: {
+        OSS_ACCESS_KEY_ID: 'ENV-AK',
+        OSS_ACCESS_KEY_SECRET: 'ENV-SECRET-SENTINEL',
+        OSS_BUCKET: 'env-bucket',
+        OSS_REGION: 'cn-beijing'
+      }
+    }
+  });
+  try {
+    const auth = await login(srv.base);
+    const res = await call(srv.base, '/admin/api/oss/config', { cookie: auth.cookie });
+    assert.equal(res.status, 200);
+    assert.equal(res.json.configured, true);
+    assert.equal(res.json.config.accessKeyId, 'ENV-AK');
+    assert.equal(res.json.config.bucket, 'env-bucket');
+    assert.equal(res.json.config.region, 'oss-cn-beijing');
+    assert.equal(res.json.config.hasSecret, true);
+    assert.equal(res.json.overrides.accessKeyId, true);
+    assert.equal(res.json.overrides.bucket, true);
+    assert.equal(res.json.overrides.pathPrefix, false);
+    assert.ok(!JSON.stringify(res.json).includes('ENV-SECRET-SENTINEL'));
+    assert.ok(!JSON.stringify(res.json).includes('FILE-SECRET-SENTINEL'));
+
+    const merged = oss.effectiveConfig(dir, {
+      OSS_ACCESS_KEY_SECRET: 'ENV-SECRET-SENTINEL',
+      OSS_BUCKET: 'env-bucket'
+    });
+    assert.equal(merged.config.accessKeySecret, 'ENV-SECRET-SENTINEL');
+    assert.equal(merged.local.accessKeySecret, 'FILE-SECRET-SENTINEL');
+  } finally {
+    await srv.close();
+    cleanup(dir);
+  }
+});
+
+test('图床：OSS V1 签名串与 HMAC-SHA1 可被独立复算', function () {
+  const signed = oss.signV1({
+    method: 'put',
+    contentType: 'image/png',
+    date: 'Thu, 17 Nov 2016 03:28:00 GMT',
+    resource: '/oss-example/key.png',
+    ossHeaders: { 'X-OSS-Object-Acl': 'public-read' },
+    accessKeyId: 'test-ak',
+    accessKeySecret: 'test-sk'
+  });
+  const expectedString = 'PUT\n\nimage/png\nThu, 17 Nov 2016 03:28:00 GMT\n' +
+    'x-oss-object-acl:public-read\n/oss-example/key.png';
+  assert.equal(signed.stringToSign, expectedString);
+  const expectedSignature = crypto.createHmac('sha1', 'test-sk')
+    .update(expectedString, 'utf8').digest('base64');
+  assert.equal(signed.signature, expectedSignature);
+  assert.equal(signed.authorization, 'OSS test-ak:' + expectedSignature);
+
+  // 对象名：前缀 + 年/月 + 短哈希 + 可读文件名
+  const key = oss.buildKey({ pathPrefix: 'blog/' }, 'photo 1.png', 'png', new Date(2026, 10, 8));
+  assert.match(key, /^blog\/2026\/11\/[0-9a-f]{8}-photo-1\.png$/);
+
+  assert.equal(
+    oss.publicUrl({ bucket: 'demo-bucket', region: 'oss-cn-hangzhou' }, 'blog/2026/11/photo 1.png'),
+    'https://demo-bucket.oss-cn-hangzhou.aliyuncs.com/blog/2026/11/photo%201.png');
+  assert.equal(
+    oss.publicUrl({ customDomain: 'https://img.example.com/' }, 'blog/2026/11/photo 1.png'),
+    'https://img.example.com/blog/2026/11/photo%201.png');
+});
+
+test('图床：上传走服务端签名，并把 URL/Markdown/HTML 返回给前端', async function () {
+  const dir = makeOssDir();
+  const captured = [];
+  const srv = await startServer(dir, null, {
+    ossOptions: {
+      env: {},
+      now: new Date(2026, 10, 8, 12, 0, 0),
+      request: function (params) {
+        captured.push(params);
+        return Promise.resolve({ status: 200, text: '', headers: {} });
+      }
+    }
+  });
+  try {
+    const auth = await login(srv.base);
+    const saved = await call(srv.base, '/admin/api/oss/config', {
+      method: 'PUT', cookie: auth.cookie, csrf: auth.csrf,
+      body: {
+        accessKeyId: 'TEST-AK', accessKeySecret: 'TEST-SK-SENTINEL',
+        bucket: 'demo-bucket', region: 'oss-cn-hangzhou', pathPrefix: 'blog/'
+      }
+    });
+    assert.equal(saved.status, 200);
+
+    const png = Buffer.from(OSS_PNG_BASE64, 'base64');
+    const up = await call(srv.base, '/admin/api/oss/upload', {
+      method: 'POST', cookie: auth.cookie, csrf: auth.csrf,
+      body: {
+        name: 'photo 1.png',
+        type: 'image/png',
+        data: 'data:image/png;base64,' + OSS_PNG_BASE64
+      }
+    });
+    assert.equal(up.status, 200);
+    assert.equal(up.json.ok, true);
+    assert.equal(up.json.bytes, png.length);
+    assert.match(up.json.key, /^blog\/2026\/11\/[0-9a-f]{8}-photo-1\.png$/);
+    assert.equal(up.json.url, 'https://demo-bucket.oss-cn-hangzhou.aliyuncs.com/' + up.json.key);
+    assert.equal(up.json.markdown, '![](' + up.json.url + ')');
+    assert.equal(up.json.html, '<img src="' + up.json.url + '" alt="">');
+    assert.ok(!JSON.stringify(up.json).includes('TEST-SK-SENTINEL'));
+
+    const req = captured[0];
+    assert.equal(req.method, 'PUT');
+    assert.equal(req.contentType, 'image/png');
+    assert.equal(req.ossHeaders['x-oss-object-acl'], 'public-read');
+    assert.equal(req.body.length, png.length);
+    assert.match(req.authorization, /^OSS TEST-AK:/);
+    assert.ok(req.stringToSign.indexOf('/demo-bucket/' + up.json.key) >= 0);
+    assert.ok(req.stringToSign.indexOf('x-oss-object-acl:public-read\n') >= 0);
+    assert.ok(!JSON.stringify(req).includes('TEST-SK-SENTINEL'));
+  } finally {
+    await srv.close();
+    cleanup(dir);
+  }
+});
+
+test('图床：非图片、超大文件与常见 OSS 错误都被明确拒绝/分类', function () {
+  assert.throws(function () {
+    oss.validateImage({ name: 'note.txt', type: 'text/plain', data: Buffer.from('hello').toString('base64') });
+  }, function (err) { return err.code === 'OSS_NOT_IMAGE'; });
+
+  const big = Buffer.alloc(oss.MAX_BYTES + 1);
+  big[0] = 0x89; big[1] = 0x50; big[2] = 0x4e; big[3] = 0x47;
+  assert.throws(function () {
+    oss.validateImage({ name: 'big.png', type: 'image/png', data: big.toString('base64') });
+  }, function (err) { return err.code === 'OSS_FILE_TOO_LARGE' && err.label === '文件过大'; });
+
+  // 声明是 PNG，内容却不是图片
+  assert.throws(function () {
+    oss.validateImage({ name: 'fake.png', type: 'image/png', data: Buffer.from('hello').toString('base64') });
+  }, function (err) { return err.code === 'OSS_NOT_IMAGE'; });
+
+  const ak = oss.classifyFailure(403,
+    '<Error><Code>InvalidAccessKeyId</Code><Message>bad ak</Message></Error>', '');
+  assert.equal(ak.code, 'OSS_AK_INVALID');
+  assert.equal(ak.label, 'AK 无效');
+  const bucket = oss.classifyFailure(404, '<Error><Code>NoSuchBucket</Code></Error>', '');
+  assert.equal(bucket.code, 'OSS_BUCKET_MISSING');
+  assert.equal(bucket.label, 'Bucket 不存在');
+  const denied = oss.classifyFailure(403, '<Error><Code>AccessDenied</Code></Error>', '');
+  assert.equal(denied.code, 'OSS_FORBIDDEN');
+  assert.equal(denied.label, '权限不足');
+  const region = oss.classifyFailure(0, '', 'ENOTFOUND');
+  assert.equal(region.code, 'OSS_REGION_INVALID');
+  assert.equal(region.label, '地域不对');
+  const timeout = oss.classifyFailure(0, '', 'ETIMEDOUT');
+  assert.equal(timeout.code, 'OSS_NETWORK');
+  assert.equal(timeout.label, '网络超时');
+});
+
+test('图床：私有配置不进源码提交、打包与源码恢复备份', function () {
+  assert.equal(source.isExcluded('.admin-oss.json'), true);
+  assert.equal(source.isExcluded('.admin-oss.json.tmp-123'), true);
+  assert.equal(packager.isExcluded('.admin-oss.json', 'light'), true);
+  assert.equal(packager.isExcluded('.admin-oss.json', 'full'), true);
+  assert.equal(packager.isExcluded('.admin-oss.json.tmp-123', 'full'), true);
+});
+
+/* ---------------------------------------------------- 图床：资源管理器 */
+
+function ossContent(key, lastModified, size, etag) {
+  return '<Contents><Key>' + key + '</Key><LastModified>' + lastModified +
+    '</LastModified><ETag>' + etag + '</ETag><Size>' + size + '</Size></Contents>';
+}
+
+const OSS_PAGE_1 = '<?xml version="1.0" encoding="UTF-8"?><ListBucketResult>' +
+  '<Name>demo-bucket</Name><Prefix>blog/2026/11/</Prefix><Marker></Marker>' +
+  '<MaxKeys>48</MaxKeys><IsTruncated>true</IsTruncated>' +
+  '<NextMarker>blog/2026/11/b.png</NextMarker><Total>3</Total>' +
+  ossContent('blog/2026/11/a.png', '2026-11-08T10:00:00.000Z', 1024, '"etag-a"') +
+  ossContent('blog/2026/11/note.txt', '2026-11-08T09:00:00.000Z', 10, '"etag-n"') +
+  ossContent('blog/2026/11/logo.svg', '2026-11-06T10:00:00.000Z', 2048, '"etag-s"') +
+  ossContent('blog/2026/11/b.png', '2026-11-07T10:00:00.000Z', 512, '"etag-b"') +
+  '</ListBucketResult>';
+
+const OSS_PAGE_2 = '<?xml version="1.0" encoding="UTF-8"?><ListBucketResult>' +
+  '<IsTruncated>false</IsTruncated>' +
+  ossContent('blog/2026/11/c.jpg', '2026-11-05T10:00:00.000Z', 300, '"etag-c"') +
+  '</ListBucketResult>';
+
+test('图床资源管理器：ListObjects 签名、图片过滤、marker 分页与域名兜底', async function () {
+  const dir = makeOssDir();
+  const captured = [];
+  const srv = await startServer(dir, null, {
+    ossOptions: {
+      env: {
+        OSS_ACCESS_KEY_ID: 'LIST-AK',
+        OSS_ACCESS_KEY_SECRET: 'LIST-SECRET-SENTINEL',
+        OSS_BUCKET: 'demo-bucket',
+        OSS_REGION: 'oss-cn-hangzhou',
+        OSS_CUSTOM_DOMAIN: 'https://wenroumao.cn/'
+      },
+      request: function (params) {
+        captured.push(params);
+        if (params.query.indexOf('marker=') >= 0) {
+          return Promise.resolve({ status: 200, text: OSS_PAGE_2, headers: {} });
+        }
+        return Promise.resolve({ status: 200, text: OSS_PAGE_1, headers: {} });
+      },
+      probeDomain: function () { return Promise.resolve(false); }
+    }
+  });
+  try {
+    const auth = await login(srv.base);
+    const first = await call(srv.base,
+      '/admin/api/oss/objects?limit=48&prefix=' + encodeURIComponent('blog/2026/11/'),
+      { cookie: auth.cookie });
+    assert.equal(first.status, 200);
+    assert.equal(first.json.ok, true);
+    assert.equal(first.json.items.length, 3);
+    assert.deepEqual(first.json.items.map(function (item) { return item.key; }), [
+      'blog/2026/11/a.png',
+      'blog/2026/11/b.png',
+      'blog/2026/11/logo.svg'
+    ]);
+    assert.equal(first.json.hasMore, true);
+    assert.equal(first.json.nextMarker, 'blog/2026/11/b.png');
+    assert.equal(first.json.total, 3);
+    assert.equal(first.json.order, 'lastModified-desc');
+    assert.equal(first.json.domain.customDomain, 'https://wenroumao.cn');
+    assert.equal(first.json.domain.ok, false);
+
+    // customDomain 打不开：url 自动退回默认域名，但三个 URL 字段都返回。
+    assert.equal(first.json.items[0].url, first.json.items[0].defaultUrl);
+    assert.match(first.json.items[0].defaultUrl, /^https:\/\/demo-bucket\.oss-cn-hangzhou\.aliyuncs\.com\//);
+    assert.match(first.json.items[0].cdnUrl, /^https:\/\/wenroumao\.cn\//);
+    assert.equal(first.json.items[0].markdown, '![](' + first.json.items[0].defaultUrl + ')');
+    assert.ok(!JSON.stringify(first.json).includes('LIST-SECRET-SENTINEL'));
+
+    // 列表请求的签名与 query：GET、bucket 根资源、marker/prefix 在 URL 而非签名串里。
+    const listReq = captured[0];
+    assert.equal(listReq.method, 'GET');
+    assert.equal(listReq.key, '');
+    assert.match(listReq.query, /prefix=blog%2F2026%2F11%2F/);
+    assert.match(listReq.query, /max-keys=48/);
+    assert.match(listReq.stringToSign, /^GET\n\n\n[^\n]+\n\/demo-bucket\/$/);
+    assert.equal(listReq.stringToSign.indexOf('prefix='), -1);
+    assert.match(listReq.authorization, /^OSS LIST-AK:/);
+    assert.ok(!JSON.stringify(listReq).includes('LIST-SECRET-SENTINEL'));
+
+    // 第二页把 marker 传回去。
+    const more = await call(srv.base,
+      '/admin/api/oss/objects?limit=48&marker=' +
+      encodeURIComponent('blog/2026/11/b.png'), { cookie: auth.cookie });
+    assert.equal(more.status, 200);
+    assert.equal(more.json.items.length, 1);
+    assert.equal(more.json.items[0].key, 'blog/2026/11/c.jpg');
+    assert.equal(more.json.hasMore, false);
+    assert.equal(more.json.nextMarker, '');
+    assert.match(captured[1].query, /marker=blog%2F2026%2F11%2Fb\.png/);
+
+    // search 在服务端过滤当前页；txt 被扩展名过滤掉。
+    const searched = await call(srv.base,
+      '/admin/api/oss/objects?limit=48&search=logo', { cookie: auth.cookie });
+    assert.equal(searched.status, 200);
+    assert.equal(searched.json.items.length, 1);
+    assert.equal(searched.json.items[0].key, 'blog/2026/11/logo.svg');
+  } finally {
+    await srv.close();
+    cleanup(dir);
+  }
+});
+
+test('图床资源管理器：批量删除返回逐条明细，缺 CSRF 与超量被拒', async function () {
+  const dir = makeOssDir();
+  const deletedKeys = [];
+  const srv = await startServer(dir, null, {
+    ossOptions: {
+      env: {
+        OSS_ACCESS_KEY_ID: 'DEL-AK',
+        OSS_ACCESS_KEY_SECRET: 'DEL-SECRET-SENTINEL',
+        OSS_BUCKET: 'demo-bucket',
+        OSS_REGION: 'oss-cn-hangzhou'
+      },
+      request: function (params) {
+        if (params.method !== 'DELETE') {
+          return Promise.resolve({ status: 200, text: '', headers: {} });
+        }
+        deletedKeys.push(params.key);
+        if (params.key === 'blog/denied.png') {
+          const err = oss.classifyFailure(403,
+            '<Error><Code>AccessDenied</Code><Message>no delete permission</Message></Error>', '');
+          err.ossCode = 'AccessDenied';
+          err.ossMessage = 'no delete permission';
+          err.ossStatus = 403;
+          return Promise.reject(err);
+        }
+        return Promise.resolve({ status: 204, text: '', headers: {} });
+      }
+    }
+  });
+  try {
+    const auth = await login(srv.base);
+    const res = await call(srv.base, '/admin/api/oss/delete', {
+      method: 'POST', cookie: auth.cookie, csrf: auth.csrf,
+      body: { keys: ['blog/good.png', 'blog/denied.png', '../bad.png'] }
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.json.ok, false);
+    assert.equal(res.json.partial, true);
+    assert.equal(res.json.deleted, 1);
+    assert.equal(res.json.failed, 2);
+    assert.equal(res.json.total, 3);
+    assert.deepEqual(deletedKeys, ['blog/good.png', 'blog/denied.png']);
+
+    const good = res.json.results.find(function (item) { return item.key === 'blog/good.png'; });
+    const denied = res.json.results.find(function (item) { return item.key === 'blog/denied.png'; });
+    const bad = res.json.results.find(function (item) { return item.key === '../bad.png'; });
+    assert.ok(good && good.ok);
+    assert.equal(denied.code, 'OSS_FORBIDDEN');
+    assert.equal(denied.ossCode, 'AccessDenied');
+    assert.equal(denied.remoteMessage, 'no delete permission');
+    assert.equal(bad.code, 'OSS_BAD_KEY');
+    assert.ok(!JSON.stringify(res.json).includes('DEL-SECRET-SENTINEL'));
+
+    // 缺 CSRF：写接口必须被拒
+    const noCsrf = await call(srv.base, '/admin/api/oss/delete', {
+      method: 'POST', cookie: auth.cookie, body: { keys: ['blog/good.png'] }
+    });
+    assert.equal(noCsrf.status, 403);
+
+    // 单次超过 100 个：不联网，直接拒绝
+    const many = [];
+    for (let i = 0; i < 101; i++) many.push('blog/' + i + '.png');
+    let limitError = null;
+    try {
+      await oss.deleteObjects(dir, { keys: many }, {
+        env: {
+          OSS_ACCESS_KEY_ID: 'DEL-AK', OSS_ACCESS_KEY_SECRET: 'x',
+          OSS_BUCKET: 'demo-bucket', OSS_REGION: 'oss-cn-hangzhou'
+        }
+      });
+    } catch (err) { limitError = err; }
+    assert.ok(limitError);
+    assert.equal(limitError.code, 'OSS_DELETE_LIMIT');
+  } finally {
+    await srv.close();
+    cleanup(dir);
+  }
+});
+
+test('图床资源管理器：未配置时列表/删除返回 OSS_NOT_CONFIGURED', async function () {
+  const dir = makeOssDir();
+  const srv = await startServer(dir, null, { ossOptions: { env: {} } });
+  try {
+    const auth = await login(srv.base);
+    const list = await call(srv.base, '/admin/api/oss/objects', { cookie: auth.cookie });
+    assert.equal(list.status, 400);
+    assert.equal(list.json.error.code, 'OSS_NOT_CONFIGURED');
+    assert.match(list.json.error.message, /AccessKeyId/);
+
+    const del = await call(srv.base, '/admin/api/oss/delete', {
+      method: 'POST', cookie: auth.cookie, csrf: auth.csrf,
+      body: { keys: ['blog/a.png'] }
+    });
+    assert.equal(del.status, 400);
+    assert.equal(del.json.error.code, 'OSS_NOT_CONFIGURED');
+  } finally {
+    await srv.close();
+    cleanup(dir);
   }
 });

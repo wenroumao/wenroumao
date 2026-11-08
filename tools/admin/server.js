@@ -18,6 +18,7 @@ const deploy = require('./deploy');
 const source = require('./source');
 const packager = require('./package');
 const ssh = require('./ssh');
+const oss = require('./oss');
 
 const COOKIE_NAME = 'fomalhaut_admin';
 const UI_DIR = path.join(__dirname, 'ui');
@@ -133,9 +134,13 @@ function createAdminServer(options) {
   // 打包与 SSH 的 home/压缩器/执行器都可注入，测试里不碰真实 ~/.ssh、不联网。
   const packageOptions = opts.packageOptions || {};
   const sshOptions = opts.sshOptions || {};
+  // 图床：env 可注入，request 可注入（测试不联网）。
+  const ossOptions = opts.ossOptions || {};
+  const ossEnv = ossOptions.env || env;
   let sourceBusy = false;
   let packageBusy = false;
   let sshBusy = false;
+  let ossBusy = false;
   let currentJobId = '';
   let lastJobId = '';
   let pendingAuto = false;
@@ -172,6 +177,27 @@ function createAdminServer(options) {
 
   function fail(res, code, message) {
     sendJson(res, code, { error: { message: message } });
+  }
+
+  /** 图床错误：保留分类 label/hint，前端可直接显示人话。 */
+  function sendOssFailure(res, err) {
+    const code = (err && err.code) || 'OSS_REMOTE_ERROR';
+    let status = 502;
+    if (code === 'OSS_NOT_CONFIGURED' || code === 'OSS_NOT_IMAGE' ||
+        code === 'OSS_DELETE_INVALID' || code === 'OSS_DELETE_LIMIT') {
+      status = code === 'OSS_NOT_IMAGE' ? 415 : 400;
+    } else if (code === 'OSS_FILE_TOO_LARGE') status = 413;
+    else if (code === 'OSS_LIST_FORBIDDEN') status = 403;
+    else if (code === 'OSS_CONFIG_WRITE_FAILED') status = 500;
+    sendJson(res, status, {
+      ok: false,
+      error: {
+        code: code,
+        label: (err && err.label) || '图床错误',
+        message: (err && err.message) || 'OSS 操作失败。',
+        hint: (err && err.hint) || ''
+      }
+    });
   }
 
   /** 没有注入站点渲染器时的兜底：原样显示，不假装是 Markdown 渲染结果。 */
@@ -1057,6 +1083,110 @@ function createAdminServer(options) {
         }).then(function () { sshBusy = false; });
       }).catch(function (err) {
         sshBusy = false;
+        fail(res, 400, err.message);
+      });
+    }
+
+    /* --------------------------------------------------------- 图床（OSS） */
+    // GET 只读配置；未配置时也返回 200，前端展示引导文案。
+    if (apiPath === '/oss/config' && isRead) {
+      try {
+        return sendJson(res, 200, oss.describe(baseDir, ossEnv));
+      } catch (err) {
+        return fail(res, 500, err.message);
+      }
+    }
+
+    // PUT：secret 留空表示保留原值；写入 .admin-oss.json（0600）。
+    if (apiPath === '/oss/config' && method === 'PUT') {
+      return readBody(req, 64 * 1024).then(function (body) {
+        try {
+          sendJson(res, 200, oss.saveConfig(baseDir, body, ossEnv));
+        } catch (err) {
+          sendOssFailure(res, err);
+        }
+      }).catch(function (err) {
+        if (err && err.code) return sendOssFailure(res, err);
+        fail(res, 400, err.message);
+      });
+    }
+
+    // POST：base64 上传；服务端签名，AK 不下发浏览器。
+    if (apiPath === '/oss/upload' && method === 'POST') {
+      if (ossBusy) return fail(res, 409, '上一张图片还在上传，请稍候。');
+      ossBusy = true;
+      return readBody(req, 16 * 1024 * 1024).then(function (body) {
+        return oss.uploadImage(baseDir, body, {
+          env: ossEnv,
+          request: ossOptions.request,
+          probeDomain: ossOptions.probeDomain,
+          now: ossOptions.now
+        }).then(function (result) {
+          sendJson(res, 200, result);
+        }).catch(function (err) {
+          sendOssFailure(res, err);
+        }).then(function () { ossBusy = false; });
+      }).catch(function (err) {
+        ossBusy = false;
+        if (err && err.code) return sendOssFailure(res, err);
+        fail(res, 400, err.message);
+      });
+    }
+
+    // POST：上传 1×1 测试图并删除；只用于验证 AK/Bucket/Region 组合是否正确。
+    if (apiPath === '/oss/test' && method === 'POST') {
+      if (ossBusy) return fail(res, 409, '图床正在忙，请稍后再测试。');
+      ossBusy = true;
+      return readBody(req, 8 * 1024).then(function () {
+        return oss.testConnection(baseDir, {
+          env: ossEnv,
+          request: ossOptions.request
+        }).then(function (result) {
+          sendJson(res, 200, result);
+        }).catch(function (err) {
+          sendOssFailure(res, err);
+        }).then(function () { ossBusy = false; });
+      }).catch(function (err) {
+        ossBusy = false;
+        if (err && err.code) return sendOssFailure(res, err);
+        fail(res, 400, err.message);
+      });
+    }
+
+    // GET：列出 OSS 里的图片，marker 分页；customDomain 不可用时自动回退默认域名。
+    if (apiPath === '/oss/objects' && isRead) {
+      return oss.listObjects(baseDir, {
+        prefix: parsed.searchParams.get('prefix') || '',
+        marker: parsed.searchParams.get('marker') || '',
+        limit: parsed.searchParams.get('limit') || '',
+        search: parsed.searchParams.get('search') || ''
+      }, {
+        env: ossEnv,
+        request: ossOptions.request,
+        probeDomain: ossOptions.probeDomain
+      }).then(function (result) {
+        sendJson(res, 200, result);
+      }).catch(function (err) {
+        sendOssFailure(res, err);
+      });
+    }
+
+    // POST：批量删除；返回每个 key 的成功/失败明细。
+    if (apiPath === '/oss/delete' && method === 'POST') {
+      if (ossBusy) return fail(res, 409, '图床正在忙，请稍后再删除。');
+      ossBusy = true;
+      return readBody(req, 256 * 1024).then(function (body) {
+        return oss.deleteObjects(baseDir, body, {
+          env: ossEnv,
+          request: ossOptions.request
+        }).then(function (result) {
+          sendJson(res, 200, result);
+        }).catch(function (err) {
+          sendOssFailure(res, err);
+        }).then(function () { ossBusy = false; });
+      }).catch(function (err) {
+        ossBusy = false;
+        if (err && err.code) return sendOssFailure(res, err);
         fail(res, 400, err.message);
       });
     }

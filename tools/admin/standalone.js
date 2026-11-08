@@ -29,7 +29,8 @@ function createStandaloneServer(options) {
     runGenerate: options.runGenerate || createAdmin.createHexoRunner(baseDir),
     sourceOptions: options.sourceOptions,
     packageOptions: options.packageOptions,
-    sshOptions: options.sshOptions
+    sshOptions: options.sshOptions,
+    ossOptions: options.ossOptions
   });
 
   return http.createServer(function (req, res) {
