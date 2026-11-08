@@ -20,6 +20,7 @@ const packager = require('./package');
 const ssh = require('./ssh');
 const oss = require('./oss');
 const importer = require('./importer');
+const exporter = require('./exporter');
 
 const COOKIE_NAME = 'fomalhaut_admin';
 const UI_DIR = path.join(__dirname, 'ui');
@@ -32,7 +33,11 @@ const STATIC_FILES = {
   '/preview': { file: 'preview.html', type: 'text/html; charset=utf-8', frameable: true },
   '/preview.html': { file: 'preview.html', type: 'text/html; charset=utf-8', frameable: true },
   '/preview.js': { file: 'preview.js', type: 'text/javascript; charset=utf-8' },
-  '/preview.css': { file: 'preview.css', type: 'text/css; charset=utf-8' }
+  '/preview.css': { file: 'preview.css', type: 'text/css; charset=utf-8' },
+  '/print': { file: 'print.html', type: 'text/html; charset=utf-8' },
+  '/print.html': { file: 'print.html', type: 'text/html; charset=utf-8' },
+  '/print.js': { file: 'print.js', type: 'text/javascript; charset=utf-8' },
+  '/print.css': { file: 'print.css', type: 'text/css; charset=utf-8' }
 };
 
 /**
@@ -831,6 +836,32 @@ function createAdminServer(options) {
       }).then(function (result) {
         sendJson(res, 200, result);
       }).catch(function (err) { sendImportFailure(res, err); });
+    }
+
+    if (apiPath === '/export/md' && method === 'POST') {
+      return readBody(req, 3 * 1024 * 1024).then(function (body) {
+        sendJson(res, 200, exporter.buildMarkdown(body));
+      }).catch(function (err) {
+        return fail(res, 400, (err && err.message) || '导出 Markdown 失败。');
+      });
+    }
+
+    if (apiPath === '/export/docx' && method === 'POST') {
+      return readBody(req, 3 * 1024 * 1024).then(function (body) {
+        return exporter.buildDocx(body);
+      }).then(function (result) {
+        securityHeaders(res);
+        res.statusCode = 200;
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+        res.setHeader('Content-Disposition', 'attachment; filename="post.docx"; filename*=UTF-8\'\'' + encodeURIComponent(result.filename));
+        res.setHeader('Cache-Control', 'no-store');
+        res.setHeader('X-Export-Size', String(result.size));
+        res.setHeader('X-Export-Images', String(result.images));
+        res.setHeader('X-Export-Warnings', encodeURIComponent(JSON.stringify(result.warnings || [])));
+        res.end(result.buffer);
+      }).catch(function (err) {
+        sendJson(res, 500, { ok: false, error: { message: '导出 Word 失败：' + ((err && err.message) || err) } });
+      });
     }
 
     if (apiPath === '/config' && method === 'PUT') {

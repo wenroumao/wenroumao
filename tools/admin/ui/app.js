@@ -441,6 +441,143 @@ function editorPayload() {
   };
 }
 
+/* ------------------------------------------------------------ 导出（三期） */
+
+function formatBytes(size) {
+  const value = Number(size) || 0;
+  if (value < 1024) return value + ' B';
+  if (value < 1024 * 1024) return (value / 1024).toFixed(1) + ' KB';
+  return (value / (1024 * 1024)).toFixed(2) + ' MB';
+}
+
+function triggerDownload(filename, blob) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(function () { URL.revokeObjectURL(url); }, 1500);
+}
+
+function exportFilename(disposition, fallback) {
+  if (!disposition) return fallback;
+  const star = /filename\*=UTF-8''([^;]+)/i.exec(disposition);
+  if (star) {
+    try { return decodeURIComponent(star[1]); } catch (err) { /* 继续尝试 */ }
+  }
+  const plain = /filename="([^"]+)"/i.exec(disposition);
+  return plain ? plain[1] : fallback;
+}
+
+function requireExportTitle(payload) {
+  if (payload.title) return true;
+  toast('先填写文章标题再导出。', 'error');
+  $('editor-title').focus();
+  return false;
+}
+
+async function exportMarkdownFile() {
+  const payload = editorPayload();
+  if (!requireExportTitle(payload)) return;
+  try {
+    const data = await api('/export/md', { method: 'POST', body: payload, csrf: true });
+    triggerDownload(data.filename, new Blob([data.markdown], { type: 'text/markdown;charset=utf-8' }));
+    toast('已导出 ' + data.filename, 'ok');
+  } catch (err) {
+    toast('导出 Markdown 失败：' + err.message, 'error');
+  }
+}
+
+async function exportWordFile() {
+  const payload = editorPayload();
+  if (!requireExportTitle(payload)) return;
+  const btn = $('export-word');
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '正在生成…';
+  try {
+    const res = await fetch(API + '/export/docx', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': state.session.csrf },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) {
+      let message = '导出失败：' + res.status;
+      try {
+        const data = JSON.parse(await res.text());
+        if (data.error && data.error.message) message = data.error.message;
+      } catch (err) { /* 保留默认文案 */ }
+      if (res.status === 401) showLogin();
+      throw new Error(message);
+    }
+    const blob = await res.blob();
+    let warnings = [];
+    try { warnings = JSON.parse(decodeURIComponent(res.headers.get('X-Export-Warnings') || '[]')); } catch (err) { warnings = []; }
+    const filename = exportFilename(res.headers.get('Content-Disposition'), (payload.title || '文章') + '.docx');
+    triggerDownload(filename, blob);
+    const size = Number(res.headers.get('X-Export-Size')) || blob.size;
+    if (warnings.length) {
+      toast('已导出 ' + formatBytes(size) + '，图片提示：' + warnings.join('；'), 'error');
+    } else {
+      toast('已导出 ' + filename + '（' + formatBytes(size) + '）', 'ok');
+    }
+  } catch (err) {
+    toast(err.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+}
+
+async function openPrintPage() {
+  const payload = editorPayload();
+  if (!requireExportTitle(payload)) return;
+  let html = '';
+  try {
+    const data = await api('/preview', { method: 'POST', body: { body: payload.body }, csrf: true });
+    html = data.html || '';
+  } catch (err) {
+    toast('渲染正文失败：' + err.message, 'error');
+    return;
+  }
+  const key = 'admin.print.' + Date.now().toString(36) + '.' + Math.random().toString(36).slice(2, 8);
+  try {
+    prunePrintCache();
+    localStorage.setItem(key, JSON.stringify({
+      title: payload.title,
+      date: payload.date,
+      categories: payload.categories,
+      html: html
+    }));
+  } catch (err) {
+    toast('打印内容过大，浏览器无法暂存：' + err.message, 'error');
+    return;
+  }
+  const win = window.open('/admin/print#' + key, '_blank');
+  if (!win) {
+    try { localStorage.removeItem(key); } catch (err) { /* 忽略 */ }
+    toast('浏览器拦截了新窗口，请允许本站弹出窗口后重试。', 'error');
+    return;
+  }
+  toast('已打开打印预览，在新页面点「打印 / 另存为 PDF」即可。', 'ok');
+}
+
+/** 清理一小时前没被打印页取走的临时内容，避免 localStorage 里堆积正文。 */
+function prunePrintCache() {
+  const expire = Date.now() - 60 * 60 * 1000;
+  const stale = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (!key || !key.startsWith('admin.print.')) continue;
+    const stamp = parseInt(key.split('.')[2] || '', 36);
+    if (!stamp || stamp < expire) stale.push(key);
+  }
+  stale.forEach(function (key) { localStorage.removeItem(key); });
+}
+
 async function saveEditor() {
   if (!state.editing) return;
   const payload = editorPayload();
@@ -1135,6 +1272,11 @@ function bindEditorTools() {
     if (!$('snippets-panel').hidden) $('snippets-panel').hidden = true;
   });
 
+  $('export-md').addEventListener('click', exportMarkdownFile);
+  $('export-pdf').addEventListener('click', openPrintPage);
+  $('export-word').addEventListener('click', exportWordFile);
+
+  setupSplitter();
 }
 
 /* ---------------------------------------------------------------- 配置页 */

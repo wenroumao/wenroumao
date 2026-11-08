@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>打印预览</title>
+<link rel="stylesheet" href="/admin/print.css">
+</head>
+<body>
+<header class="print-bar">
+  <div class="print-info">
+    <strong>打印预览</strong>
+    <span>点右侧「打印 / 另存为 PDF」，在弹出的打印对话框里把「目标」改成「另存为 PDF」，纸张选 A4。</span>
+  </div>
+  <div class="print-actions">
+    <label class="print-check"><input id="print-numbers" type="checkbox" checked> <span>显示页码</span></label>
+    <button id="print-go" type="button">打印 / 另存为 PDF</button>
+    <button id="print-close" type="button" class="ghost">关闭</button>
+  </div>
+</header>
+<main id="print-pages" class="pages"></main>
+<script src="/admin/print.js" defer></script>
+</body>
+</html>

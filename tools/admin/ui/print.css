@@ -1,0 +1,189 @@
+/* tools/admin/ui/print.css —— 打印预览页的独立样式（不依赖站点主题） */
+
+:root {
+  --ink: #22282e;
+  --muted: #6b7280;
+  --line: #d7dbe0;
+  --accent: #2f6feb;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: #eceef1;
+  color: var(--ink);
+  font: 16px/1.75 "Songti SC", "Source Han Serif SC", "Noto Serif SC", Georgia, "Times New Roman", serif;
+}
+
+/* ------------------------------------------------------------ 顶部工具栏 */
+
+.print-bar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 12px 22px;
+  background: #1f252c;
+  color: #eef1f4;
+  font: 13px/1.5 system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+.print-info { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.print-info strong { font-size: 13.5px; letter-spacing: .02em; }
+.print-info span { color: #aab3bd; }
+.print-actions { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
+.print-check { display: inline-flex; align-items: center; gap: 6px; color: #cfd6de; cursor: pointer; }
+.print-check input { accent-color: var(--accent); }
+.print-bar button {
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 8px 14px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  background: var(--accent);
+  color: #fff;
+}
+.print-bar button:hover { filter: brightness(1.08); }
+.print-bar button.ghost { background: transparent; border-color: #3d454e; color: #cfd6de; }
+
+/* ------------------------------------------------------------ A4 纸张 */
+
+.pages { padding: 26px 0 60px; }
+
+.page {
+  width: 210mm;
+  height: 297mm;
+  margin: 0 auto 20px;
+  padding: 18mm 16mm 12mm;
+  background: #fff;
+  box-shadow: 0 3px 16px rgba(15, 23, 42, .14);
+  display: flex;
+  flex-direction: column;
+  print-color-adjust: exact;
+  -webkit-print-color-adjust: exact;
+}
+.page-body { flex: 1 1 auto; min-height: 0; overflow: hidden; }
+.page-body--plain { overflow: visible; }
+.page-foot {
+  flex: 0 0 8mm;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  font: 10.5px/1.4 system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  color: #8a929b;
+}
+.page-foot[hidden] { display: none; }
+
+/* ------------------------------------------------------------ 文章排版 */
+
+.doc-head { margin-bottom: 18mm; }
+.doc-head h1 {
+  margin: 0 0 8px;
+  font-size: 26px;
+  line-height: 1.35;
+  letter-spacing: .01em;
+}
+.doc-meta {
+  font: 12px/1.6 system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  color: var(--muted);
+}
+
+.doc-body h1, .doc-body h2, .doc-body h3,
+.doc-body h4, .doc-body h5, .doc-body h6 {
+  margin: 1.35em 0 .55em;
+  line-height: 1.4;
+  page-break-after: avoid;
+  break-after: avoid;
+}
+.doc-body h1 { font-size: 22px; }
+.doc-body h2 { font-size: 20px; }
+.doc-body h3 { font-size: 18px; }
+.doc-body h4 { font-size: 16.5px; }
+.doc-body h5 { font-size: 15px; }
+.doc-body h6 { font-size: 14px; color: #4b5563; }
+.doc-body p { margin: 0 0 .95em; text-align: justify; }
+.doc-body ul, .doc-body ol { margin: .4em 0 1em; padding-left: 1.6em; }
+.doc-body li { margin: .22em 0; }
+.doc-body li > ul, .doc-body li > ol { margin: .2em 0 .3em; }
+.doc-body blockquote {
+  margin: 1em 0;
+  padding: .5em .9em;
+  border-left: 3px solid var(--line);
+  background: #f7f8fa;
+  color: #3d454e;
+}
+.doc-body blockquote p:last-child { margin-bottom: 0; }
+.doc-body code {
+  font: 13px/1.6 Consolas, "SFMono-Regular", "Courier New", monospace;
+  background: #f2f3f5;
+  padding: .12em .35em;
+  border-radius: 3px;
+}
+.doc-body pre {
+  margin: 1em 0;
+  padding: 12px 14px;
+  background: #f2f3f5;
+  border: 1px solid #e2e5e9;
+  border-radius: 4px;
+  overflow-x: auto;
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+.doc-body pre code { background: none; padding: 0; font-size: 12.5px; }
+.doc-body img { max-width: 100%; height: auto; }
+.doc-body table {
+  width: 100%;
+  margin: 1em 0;
+  border-collapse: collapse;
+  font-size: 14px;
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+.doc-body th, .doc-body td {
+  border: 1px solid var(--line);
+  padding: 6px 9px;
+  text-align: left;
+  vertical-align: top;
+}
+.doc-body th { background: #f2f3f5; font-weight: 600; }
+.doc-body hr { border: 0; border-top: 1px solid var(--line); margin: 1.4em 0; }
+.doc-body a { color: #1d4ed8; text-decoration: none; }
+.doc-body figure { margin: 1em 0; text-align: center; }
+.doc-body .preview-empty { color: var(--muted); }
+.print-empty {
+  padding: 40px 24px;
+  background: #fff;
+  color: var(--muted);
+  text-align: center;
+}
+
+@media (max-width: 860px) {
+  .pages { padding: 12px; overflow-x: auto; }
+  .page { width: 210mm; transform-origin: top left; }
+  .print-info span { display: none; }
+}
+
+/* ------------------------------------------------------------ 真正的打印 */
+
+@media print {
+  @page { size: A4; margin: 0; }
+
+  html, body { background: #fff; }
+  .print-bar { display: none; }
+  .pages { padding: 0; }
+  .page {
+    width: 210mm;
+    height: 297mm;
+    margin: 0;
+    box-shadow: none;
+    page-break-after: always;
+    break-after: page;
+  }
+  .page:last-child { page-break-after: auto; break-after: auto; }
+  .doc-body pre, .doc-body table, .doc-body blockquote { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+}

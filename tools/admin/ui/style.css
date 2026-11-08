@@ -498,7 +498,7 @@ code { font-family: var(--mono); font-size: .92em; }
 /* --------------------------------------------------------------- 编辑器 */
 
 .editor-head { display: flex; align-items: center; gap: 14px; margin-bottom: 16px; }
-.editor-head-actions { margin-left: auto; display: flex; align-items: center; gap: 14px; }
+.editor-head-actions { margin-left: auto; display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 10px; }
 .dirty-dot { font: 11px var(--mono); color: var(--warn); letter-spacing: .06em; }
 .dirty-dot::before { content: "●"; margin-right: 5px; }
 .save-state { font: 11.5px var(--mono); color: var(--muted); }

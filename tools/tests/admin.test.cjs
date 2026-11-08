@@ -20,6 +20,7 @@ const ssh = require('../admin/ssh.js');
 const oss = require('../admin/oss.js');
 const source = require('../admin/source.js');
 const importer = require('../admin/importer.js');
+const exporter = require('../admin/exporter.js');
 const crypto = require('crypto');
 
 const CONFIG_SITE = [
@@ -2239,6 +2240,153 @@ test('导入接口：缺 CSRF 被拒，内网地址被拦，.md 导入可用', a
     assert.equal(md.json.title, '导入标题');
     assert.deepEqual(md.json.tags, ['导入']);
     assert.equal(md.json.rawBody === undefined, true);
+  } finally {
+    await srv.close();
+    cleanup(dir);
+  }
+});
+
+/* -------------------------------------------------------- 导出（三期） */
+
+const TINY_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+
+const EXPORT_BODY = [
+  '# 一级标题',
+  '',
+  '段落含 **加粗**、*斜体*、~~删除线~~、`行内代码`。',
+  '',
+  '> 引用的一行',
+  '',
+  '- 无序甲',
+  '  - 嵌套乙',
+  '',
+  '1. 有序一',
+  '2. 有序二',
+  '',
+  '```js',
+  'const a = 1;',
+  '```',
+  '',
+  '| 名称 | 数值 |',
+  '| :--- | ---: |',
+  '| A | 1 |',
+  '',
+  '![示意](data:image/png;base64,' + TINY_PNG + ')'
+].join('\n');
+
+test('导出 Markdown：front matter 字段齐全、正文保留', function () {
+  const result = exporter.buildMarkdown({
+    title: '导出样例',
+    date: '2026-11-08 10:00:00',
+    categories: '测试, 导出',
+    tags: 'markdown，word',
+    cover: '/img/c.png',
+    description: '摘要',
+    comments: false,
+    published: true,
+    body: '# 正文\n\n内容'
+  });
+  assert.match(result.markdown, /^---\ntitle: 导出样例\n/);
+  assert.match(result.markdown, /categories:\n  - 测试\n  - 导出/);
+  assert.match(result.markdown, /tags:\n  - markdown\n  - word/);
+  assert.match(result.markdown, /comments: false/);
+  assert.doesNotMatch(result.markdown, /published: false/);
+  assert.match(result.markdown, /\n---\n\n# 正文\n\n内容\n$/);
+  assert.equal(result.filename, '导出样例.md');
+  assert.ok(result.charCount > 0);
+
+  const draft = exporter.buildMarkdown({ title: '', published: false, body: '' });
+  assert.equal(draft.filename, '未命名文章.md');
+  assert.match(draft.markdown, /published: false/);
+});
+
+test('导出 Word：OOXML 关键片段与内嵌图片关系', async function () {
+  const warnings = [];
+  const built = await exporter.buildParts({ title: '导出样例', body: EXPORT_BODY }, warnings);
+  const doc = built.parts['word/document.xml'].toString('utf8');
+  assert.match(doc, /<w:pStyle w:val="Heading1"\/>/);
+  assert.match(doc, /<w:b\/>/);
+  assert.match(doc, /<w:i\/>/);
+  assert.match(doc, /<w:strike\/>/);
+  assert.match(doc, /<w:numPr>/);
+  assert.match(doc, /<w:numId w:val="1"\/>/);
+  assert.match(doc, /<w:numId w:val="2"\/>/);
+  assert.match(doc, /<w:tbl>/);
+  assert.match(doc, /<w:shd w:val="clear" w:color="auto" w:fill="F7F8FA"\/>/);
+  assert.match(doc, /<w:drawing>/);
+  assert.match(doc, /<w:sectPr>/);
+
+  assert.match(built.parts['word/styles.xml'].toString('utf8'), /w:styleId="Heading1"/);
+  assert.match(built.parts['word/numbering.xml'].toString('utf8'), /w:abstractNumId="2"/);
+  assert.match(built.parts['[Content_Types].xml'].toString('utf8'), /wordprocessingml\.document\.main\+xml/);
+  assert.match(built.parts['word/_rels/document.xml.rels'].toString('utf8'), /media\/image1\.png/);
+  assert.ok(built.parts['word/media/image1.png'] && built.parts['word/media/image1.png'].length > 0);
+  assert.deepEqual(warnings, []);
+});
+
+test('导出 Word：超过 2 MB 的图片不嵌入，只留提示', async function () {
+  const big = Buffer.concat([Buffer.from('89504e470d0a1a0a', 'hex'), Buffer.alloc(2 * 1024 * 1024 + 10)]);
+  const body = '![大图](data:image/png;base64,' + big.toString('base64') + ')';
+  const result = await exporter.buildDocx({ title: '大图', body: body });
+  assert.match(result.warnings.join(), /超过 2 MB/);
+  assert.equal(result.images, 0);
+  assert.match(result.buffer.slice(0, 2).toString('ascii'), /^PK/);
+  assert.ok(result.size > 0);
+});
+
+test('导出接口：.md 返回 front matter，docx 是合法 zip，缺 CSRF 被拒', async function () {
+  const dir = makeFixture();
+  const srv = await startServer(dir);
+  try {
+    const auth = await login(srv.base);
+
+    const noCsrf = await call(srv.base, '/admin/api/export/md', {
+      method: 'POST', cookie: auth.cookie,
+      body: { title: '绕过', body: 'x' }
+    });
+    assert.equal(noCsrf.status, 403);
+
+    const md = await call(srv.base, '/admin/api/export/md', {
+      method: 'POST', cookie: auth.cookie, csrf: auth.csrf,
+      body: { title: '接口导出', categories: '随笔', tags: '导出', body: '# 标题\n\n正文' }
+    });
+    assert.equal(md.status, 200);
+    assert.equal(md.json.filename, '接口导出.md');
+    assert.match(md.json.markdown, /^---\ntitle: 接口导出\n/);
+    assert.match(md.json.markdown, /# 标题/);
+
+    const docxNoCsrf = await call(srv.base, '/admin/api/export/docx', {
+      method: 'POST', cookie: auth.cookie,
+      body: { title: '绕过', body: 'x' }
+    });
+    assert.equal(docxNoCsrf.status, 403);
+
+    const res = await fetch(srv.base + '/admin/api/export/docx', {
+      method: 'POST',
+      headers: {
+        Cookie: auth.cookie,
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': auth.csrf
+      },
+      body: JSON.stringify({ title: '接口导出', body: '# 标题\n\n正文段落' })
+    });
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get('content-type'), /wordprocessingml\.document/);
+    assert.equal(res.headers.get('cache-control'), 'no-store');
+    assert.match(res.headers.get('content-disposition'), /filename\*=UTF-8''/);
+    const buffer = Buffer.from(await res.arrayBuffer());
+    assert.match(buffer.slice(0, 2).toString('ascii'), /^PK/);
+    const file = path.join(os.tmpdir(), 'admin-export-test-' + Date.now() + '.docx');
+    fs.writeFileSync(file, buffer);
+    try {
+      const entries = packager.listEntries(file);
+      assert.ok(entries.includes('word/document.xml'));
+      assert.ok(entries.includes('word/styles.xml'));
+      assert.ok(entries.includes('word/numbering.xml'));
+      assert.ok(entries.includes('[Content_Types].xml'));
+    } finally {
+      try { fs.unlinkSync(file); } catch (e) { /* 忽略 */ }
+    }
   } finally {
     await srv.close();
     cleanup(dir);

@@ -512,6 +512,8 @@ module.exports = {
   isExcluded: isExcluded,
   describe: describe,
   createPackage: createPackage,
+  writeZip: writeZip,
+  crc32: crc32,
   listEntries: listEntries,
   lastRecord: lastRecord,
   migrateMarkdown: migrateMarkdown,
