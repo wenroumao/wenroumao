@@ -45,7 +45,7 @@ copy:
 #   icon: link || the description
 social:
   # 格式： 名称: 链接 || 图标类名 || 动画类名
-  Github: https://github.com/yourname || icon-github || faa-tada
+  Github: https://github.com/wenroumao || icon-github || faa-tada
   B站: https://space.bilibili.com/12345678 || icon-bilibili || faa-tada
   邮箱: mailto:you@example.com || icon-youxiang || faa-tada
   # 微信: /assets/wechat-qr.webp || icon-weixin || faa-tada
@@ -957,7 +957,7 @@ aside:
       enable: true
       icon: # fab fa-github
       text: Github主页
-      link: https://github.com/yourname
+      link: https://github.com/wenroumao
   card_announcement:
     enable: true
     content: |

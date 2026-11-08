@@ -3,11 +3,11 @@
 ## Source: https://github.com/hexojs/hexo/
 
 # Site
-title: Demo
+title: wenroumao
 subtitle:
 description: "一个基于 Hexo + Fomalhaut 主题的演示站点"
 keywords: "Hexo,Butterfly,Fomalhaut,博客,主题,卡片式UI"
-author: Demo
+author: wenroumao
 language: zh-CN
 timezone: ""
 
@@ -18,7 +18,7 @@ abbrlink:
 
 # URL
 ## Set your site url here. For example, if you use GitHub Page, set url as 'https://username.github.io/project'
-url: https://example.com/
+url: https://wenroumao.cn/
 permalink: posts/:abbrlink.html
 permalink_defaults:
 pretty_urls:
@@ -134,7 +134,7 @@ theme: fomalhaut
 ## Docs: https://hexo.io/docs/one-command-deployment
 deploy:
   - type: git
-    repository: https://github.com/yourname/yourname.github.io.git # 这个Github仓库用自动部署即可
+    repository: https://github.com/wenroumao/wenroumao.git # 这个Github仓库用自动部署即可
     branch: main
   - type: baidu_url_submitter
   # - type: git
@@ -246,9 +246,9 @@ gitcalendar:
   #   name: content
   #   index: 0
   # simplemode: true
-  user: yourname # git用户名
+  user: wenroumao # git用户名
   apiurl: "https://gitcalendar.example.com" # 你的 gitcalendar 服务地址
-  jsonurl: "https://cdn.jsdelivr.net/gh/yourname/gitcalendar-data@main/data.json" # 方案B：GitHub Action 定时更新的数据
+  jsonurl: "https://cdn.jsdelivr.net/gh/wenroumao/gitcalendar-data@main/data.json" # 方案B：GitHub Action 定时更新的数据
   minheight:
     pc: 320px #桌面端最小高度
     mibile: 0px #移动端最小高度

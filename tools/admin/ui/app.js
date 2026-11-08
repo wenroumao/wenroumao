@@ -27,7 +27,8 @@ const state = {
   configGroups: [],
   features: [],
   deploy: null,
-  history: { items: [], paths: [], path: '', action: '' }
+  history: { items: [], paths: [], path: '', action: '' },
+  source: { info: null, offset: 0, hasMore: false, busy: false }
 };
 
 function $(id) { return document.getElementById(id); }
@@ -174,6 +175,7 @@ const VIEW_META = {
   config: { kicker: 'Settings', title: '站点配置' },
   features: { kicker: 'Switches', title: '功能开关' },
   history: { kicker: 'Revisions', title: '修改历史' },
+  source: { kicker: 'Source', title: '源码' },
   publish: { kicker: 'Publish', title: '生成与推送' }
 };
 
@@ -188,7 +190,7 @@ async function switchView(name, force) {
     state.dirty = false;
     updateDirtyUI();
   }
-  ['posts', 'editor', 'config', 'features', 'history', 'publish'].forEach(function (view) {
+  ['posts', 'editor', 'config', 'features', 'history', 'source', 'publish'].forEach(function (view) {
     $('view-' + view).hidden = view !== name;
   });
   document.querySelectorAll('.nav-item').forEach(function (btn) {
@@ -203,6 +205,7 @@ async function switchView(name, force) {
   if (name === 'config') loadConfig();
   if (name === 'features') loadFeatures();
   if (name === 'history') loadHistory();
+  if (name === 'source') loadSource();
   if (name === 'publish') loadPublish();
 }
 
@@ -799,6 +802,158 @@ function renderDeployMode(deploy) {
   }
 }
 
+/* ------------------------------------------------------------------ 源码 */
+
+const SOURCE_PAGE = 10;
+
+async function loadSource(append) {
+  if (state.source.busy) return;
+  state.source.busy = true;
+  const offset = append ? state.source.offset : 0;
+  try {
+    const query = '/source?limit=' + SOURCE_PAGE + '&offset=' + offset + (append ? '&changes=0' : '');
+    const data = await api(query);
+    if (!append) {
+      state.source.info = data;
+      state.source.offset = 0;
+    }
+    renderSource(data, !!append);
+  } catch (err) {
+    if (err.status !== 401) {
+      toast('读取源码状态失败：' + err.message, 'error');
+      $('source-repo').textContent = '读取失败';
+      $('source-note').textContent = err.message;
+      const badge = $('source-state');
+      badge.textContent = '不可用';
+      badge.className = 'badge badge-warn';
+    }
+  } finally {
+    state.source.busy = false;
+  }
+}
+
+function renderSource(data, append) {
+  $('source-repo').textContent = data.repo;
+  $('source-note').textContent = '本地分支 ' + (data.localBranch || '未知') +
+    ' · HEAD ' + (data.head || '无') + ' · 推送目标 ' + data.branch;
+  if (data.clean !== null && data.clean !== undefined) {
+    const badge = $('source-state');
+    if (data.changes.length) {
+      badge.textContent = data.changes.length + ' 个改动待提交';
+      badge.className = 'badge badge-warn';
+    } else {
+      badge.textContent = '工作区干净';
+      badge.className = 'badge badge-ok';
+    }
+    renderSourceChanges(data.changes);
+  }
+  renderSourceCommits(data.commits || [], append, !!data.hasMore);
+}
+
+function renderSourceChanges(changes) {
+  const list = $('source-changes');
+  list.textContent = '';
+  $('source-change-count').textContent = changes.length ? changes.length + ' 个' : '';
+  $('source-changes-empty').hidden = changes.length > 0;
+  changes.forEach(function (row) {
+    const li = el('li');
+    li.appendChild(el('span', 'source-kind is-' + row.status, row.status));
+    li.appendChild(el('span', 'source-path', row.path));
+    li.appendChild(el('span', 'muted', row.label));
+    list.appendChild(li);
+  });
+  $('btn-source-commit').disabled = changes.length === 0;
+  $('source-hint').textContent = changes.length
+    ? '只会提交上面这 ' + changes.length + ' 个文件；.admin-auth、部署凭据、bak/、public/ 会被排除。'
+    : '工作区没有改动，不会产生空提交。';
+}
+
+function renderSourceCommits(commits, append, hasMore) {
+  const list = $('source-commits');
+  if (!append) list.textContent = '';
+  commits.forEach(function (row) {
+    const li = el('li');
+    li.appendChild(el('span', 'source-sha', row.sha));
+    li.appendChild(el('span', 'source-subject', row.subject || '(没有说明)'));
+    const meta = el('span', 'source-meta', (row.relative ? row.relative + ' · ' : '') +
+      (row.author ? row.author : ''));
+    meta.title = (row.date || '') + (row.author ? ' · ' + row.author : '');
+    li.appendChild(meta);
+    list.appendChild(li);
+  });
+  state.source.offset = (append ? state.source.offset : 0) + commits.length;
+  state.source.hasMore = hasMore;
+  $('source-commits-empty').hidden = list.children.length > 0;
+  const more = $('source-more');
+  more.hidden = !hasMore;
+  more.disabled = false;
+}
+
+function updateSourceCount() {
+  $('source-count').textContent = $('source-message').value.length + ' / 200';
+}
+
+function renderSourceLog(text) {
+  const log = $('source-log');
+  log.textContent = String(text || '').trim() || '（没有输出）';
+  log.scrollTop = log.scrollHeight;
+}
+
+async function commitSource() {
+  const input = $('source-message');
+  const message = input.value.trim();
+  if (!message) {
+    toast('请先写一句更新说明。', 'error');
+    input.focus();
+    return;
+  }
+  if (message.length > 200) {
+    toast('提交说明不能超过 200 字。', 'error');
+    return;
+  }
+  const info = state.source.info || {};
+  const changes = info.changes || [];
+  if (!changes.length) {
+    toast('没有需要提交的改动。', 'error');
+    return;
+  }
+  const ok = await confirmModal({
+    title: '提交并推送源码',
+    html: '<p>将提交 <strong>' + changes.length + ' 个文件</strong>，推送到 <code>' +
+      escapeHtml(info.repo || '') + '</code> 的 <code>' + escapeHtml(info.branch || 'source') + '</code> 分支。</p>' +
+      '<p>更新说明：<strong>' + escapeHtml(message) + '</strong></p>',
+    confirmText: '提交并推送'
+  });
+  if (!ok) return;
+
+  const btn = $('btn-source-commit');
+  btn.disabled = true;
+  btn.textContent = '正在提交…';
+  $('source-hint').textContent = '正在 git add / commit / push，请稍等。';
+  try {
+    const data = await api('/source/commit', { method: 'POST', csrf: true, body: { message: message } });
+    input.value = '';
+    updateSourceCount();
+    renderSourceLog(data.log);
+    toast('已提交并推送：' + data.commit, 'ok');
+    await loadSource();
+  } catch (err) {
+    const body = err.body || {};
+    renderSourceLog(body.log || body.raw || err.message);
+    if (body.committed) {
+      toast('已提交到本地（' + (body.commit || '') + '），但推送失败。', 'error');
+      $('source-hint').textContent = '已提交到本地、未推送：' + err.message;
+      await loadSource();
+    } else {
+      toast('提交失败：' + err.message, 'error');
+      $('source-hint').textContent = err.message;
+    }
+  } finally {
+    btn.textContent = '提交并推送';
+    btn.disabled = false;
+  }
+}
+
 async function loadPublish() {
   let deploy = null;
   try {
@@ -1377,6 +1532,17 @@ function bind() {
   });
   $('deploy-input-repo').addEventListener('input', function () {
     renderDeployMode(state.deploy);
+  });
+
+  // 源码
+  $('source-form').addEventListener('submit', function (event) {
+    event.preventDefault();
+    commitSource();
+  });
+  $('source-message').addEventListener('input', updateSourceCount);
+  $('source-more').addEventListener('click', function () {
+    $('source-more').disabled = true;
+    loadSource(true);
   });
 
   // 弹窗

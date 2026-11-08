@@ -15,6 +15,7 @@ const crypto = require('crypto');
 const { spawn } = require('child_process');
 const core = require('./core');
 const deploy = require('./deploy');
+const source = require('./source');
 
 const COOKIE_NAME = 'fomalhaut_admin';
 const UI_DIR = path.join(__dirname, 'ui');
@@ -125,6 +126,9 @@ function createAdminServer(options) {
   const sessions = new Map();
   const loginFailures = new Map();
   const jobs = new Map();
+  // 源码页的仓库/分支可注入（测试用临时裸仓库，线上走默认的 wenroumao/source）。
+  const sourceOptions = opts.sourceOptions || {};
+  let sourceBusy = false;
   let currentJobId = '';
   let lastJobId = '';
   let pendingAuto = false;
@@ -850,6 +854,63 @@ function createAdminServer(options) {
         }
       }
       return fail(res, 405, '不支持的方法。');
+    }
+
+    /* ------------------------------------------------------- 源码推送 */
+    // GET 只读本地状态：目标仓库/分支、工作区改动、分页的历史提交，不联网。
+    if (apiPath === '/source' && isRead) {
+      try {
+        source.assertRepo(baseDir);
+        return sendJson(res, 200, source.describe(baseDir, {
+          repo: sourceOptions.repo,
+          branch: sourceOptions.branch,
+          changes: parsed.searchParams.get('changes') !== '0',
+          limit: parsed.searchParams.get('limit'),
+          offset: parsed.searchParams.get('offset')
+        }));
+      } catch (err) {
+        return fail(res, err.code === 'SOURCE_NOT_REPO' ? 400 : 500, err.message);
+      }
+    }
+
+    if (apiPath === '/source/commit' && method === 'POST') {
+      if (sourceBusy) return fail(res, 409, '上一次源码提交还没结束，等它完成再试。');
+      return readBody(req, 16 * 1024).then(function (body) {
+        sourceBusy = true;
+        let log = '';
+        return source.commitAndPush(baseDir, body && body.message, {
+          repo: sourceOptions.repo,
+          branch: sourceOptions.branch,
+          log: function (text) { log += text; }
+        }).then(function (result) {
+          sendJson(res, 200, {
+            ok: true, committed: true, pushed: true,
+            commit: result.commit, files: result.files, log: result.log
+          });
+        }).catch(function (err) {
+          // commit 成功但推送失败要单独说清楚，不能混成一个“失败”。
+          const code = err && err.code ? err.code : 'SOURCE_FAILED';
+          let status = 500;
+          if (code === 'SOURCE_EMPTY' || code === 'SOURCE_MESSAGE_REQUIRED' ||
+              code === 'SOURCE_MESSAGE_TOO_LONG' || code === 'SOURCE_MESSAGE_INVALID' ||
+              code === 'SOURCE_FORBIDDEN' || code === 'SOURCE_NOT_REPO') status = 400;
+          else if (code === 'SOURCE_REMOTE_AHEAD') status = 409;
+          else if (code === 'SOURCE_PUSH_FAILED' || code === 'SOURCE_REMOTE_UNREACHABLE' ||
+              code === 'SOURCE_TIMEOUT' || code === 'SOURCE_GIT_FAILED') status = 502;
+          sendJson(res, status, {
+            ok: false,
+            error: { code: code, message: (err && err.message) || '源码提交失败。' },
+            committed: !!(err && err.committed),
+            pushed: false,
+            commit: (err && err.commit) || '',
+            files: (err && err.files) || [],
+            log: (err && err.log) || log,
+            raw: (err && err.raw) || ''
+          });
+        });
+      }).catch(function (err) { fail(res, 400, err.message); }).then(function () {
+        sourceBusy = false;
+      });
     }
 
     if (apiPath === '/publish' && isRead) {

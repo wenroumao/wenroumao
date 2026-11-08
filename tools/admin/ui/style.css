@@ -1,4 +1,4 @@
-/* ===========================================================================
+﻿/* ===========================================================================
    站点控制台样式
    方向：纸与墨的编辑部质感 —— 暖白纸面、锋利墨线、朱砂色点睛；
    深色模式转成石墨与旧纸，不换语言。
@@ -1097,3 +1097,19 @@ html[data-theme="dark"] .diff-del { background: rgba(224, 112, 79, .13); }
   .history-actions { justify-content: flex-start; }
   .history-detail { padding: 16px; }
 }
+
+/* --------------------------------------------------------------- 源码 */
+
+.source-list { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.source-list li { display: flex; align-items: baseline; gap: 10px; padding: 9px 11px; border: 1px solid var(--line); background: var(--paper-2); font-size: 12.5px; }
+.source-list .source-kind { flex: 0 0 auto; font: 11px var(--mono); letter-spacing: .04em; padding: 1px 6px; border: 1px solid var(--line); }
+.source-list .source-kind.is-A { color: var(--accent); border-color: var(--accent); }
+.source-list .source-kind.is-D { color: var(--danger); border-color: var(--danger); }
+.source-list .source-path { flex: 1 1 auto; font-family: var(--mono); word-break: break-all; }
+.source-commits .source-sha { flex: 0 0 auto; font: 11px var(--mono); color: var(--accent); }
+.source-commits .source-subject { flex: 1 1 auto; word-break: break-word; }
+.source-commits .source-meta { flex: 0 0 auto; font: 11px var(--mono); color: var(--muted); text-align: right; white-space: nowrap; }
+.source-history-head { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
+.source-history-head .btn { margin-left: auto; }
+.empty.small { padding: 28px 0; }
+.empty.small p { font-size: 15px; }

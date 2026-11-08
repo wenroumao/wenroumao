@@ -497,7 +497,7 @@ async function deployWithGit(baseDir, options, log) {
   await runGit(['add', '-A'], { cwd: work }, log);
   try {
     await runGit([
-      '-c', 'user.name=Fomalhaut Admin',
+      '-c', 'user.name=wenroumao Admin',
       '-c', 'user.email=admin@local',
       'commit', '-m', 'deploy: ' + new Date().toISOString()
     ], { cwd: work }, log);

@@ -926,3 +926,192 @@ test('留痕：同一路径超过 200 条会被裁剪并留下 purged 占位', f
   }
 });
 
+/* ---------------------------------------------------------------- 源码 */
+
+function gitExec(cwd, args) {
+  return String(execFileSync('git', args, { cwd: cwd, encoding: 'utf8', stdio: 'pipe' })).trim();
+}
+
+/** 一个工作仓库 + 一个本地裸仓库，模拟“本地提交、推送到 source”。 */
+function makeSourcePair() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fomalhaut-src-'));
+  const work = path.join(root, 'work');
+  const bare = path.join(root, 'remote.git');
+  fs.mkdirSync(work, { recursive: true });
+  gitExec(root, ['init', '-q', '--bare', bare]);
+  gitExec(work, ['init', '-q']);
+  gitExec(work, ['symbolic-ref', 'HEAD', 'refs/heads/main']);
+  gitExec(work, ['config', 'user.name', 'tester']);
+  gitExec(work, ['config', 'user.email', 'tester@local']);
+  gitExec(work, ['config', 'commit.gpgsign', 'false']);
+  fs.writeFileSync(path.join(work, 'README.md'), '# demo\n', 'utf8');
+  fs.writeFileSync(path.join(work, 'old.md'), 'old\n', 'utf8');
+  gitExec(work, ['add', '--', 'README.md', 'old.md']);
+  gitExec(work, ['commit', '-q', '-m', 'init']);
+  return { root: root, work: work, bare: bare };
+}
+
+async function sourceServer(pair) {
+  return startServer(pair.work, null, {
+    sourceOptions: { repo: pair.bare, branch: 'source' }
+  });
+}
+
+test('源码：没有改动时不产生空提交', async function () {
+  const pair = makeSourcePair();
+  const srv = await sourceServer(pair);
+  try {
+    const auth = await login(srv.base);
+    const before = gitExec(pair.work, ['rev-list', '--count', 'HEAD']);
+    const res = await call(srv.base, '/admin/api/source/commit', {
+      method: 'POST', cookie: auth.cookie, csrf: auth.csrf,
+      body: { message: '没有改动也要提交' }
+    });
+    assert.equal(res.status, 400);
+    assert.equal(res.json.error.code, 'SOURCE_EMPTY');
+    assert.equal(gitExec(pair.work, ['rev-list', '--count', 'HEAD']), before);
+  } finally {
+    await srv.close();
+    cleanup(pair.root);
+  }
+});
+
+test('源码：显式 add 全部改动、排除私有文件并推送', async function () {
+  const pair = makeSourcePair();
+  const srv = await sourceServer(pair);
+  try {
+    const auth = await login(srv.base);
+    fs.writeFileSync(path.join(pair.work, 'README.md'), '# demo changed\n', 'utf8');
+    fs.writeFileSync(path.join(pair.work, 'new.txt'), 'new\n', 'utf8');
+    fs.unlinkSync(path.join(pair.work, 'old.md'));
+    fs.writeFileSync(path.join(pair.work, '.admin-auth'), 'ADMIN_PASSWORD=secret\n', 'utf8');
+    fs.mkdirSync(path.join(pair.work, 'bak'), { recursive: true });
+    fs.writeFileSync(path.join(pair.work, 'bak', 'private.md'), 'secret\n', 'utf8');
+    fs.mkdirSync(path.join(pair.work, 'public'), { recursive: true });
+    fs.writeFileSync(path.join(pair.work, 'public', 'index.html'), '<html></html>\n', 'utf8');
+
+    const list = await call(srv.base, '/admin/api/source', { cookie: auth.cookie });
+    assert.equal(list.status, 200);
+    assert.deepEqual(list.json.changes.map(function (row) { return row.path; }),
+      ['README.md', 'new.txt', 'old.md']);
+    assert.deepEqual(list.json.changes.map(function (row) { return row.status; }),
+      ['M', 'A', 'D']);
+
+    const res = await call(srv.base, '/admin/api/source/commit', {
+      method: 'POST', cookie: auth.cookie, csrf: auth.csrf,
+      body: { message: '调整首页与清理示例' }
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.json.pushed, true);
+    assert.equal(res.json.commit.length, 7);
+    assert.equal(res.json.files.length, 3);
+
+    const head = gitExec(pair.work, ['rev-parse', 'HEAD']);
+    assert.equal(gitExec(pair.bare, ['rev-parse', 'refs/heads/source']), head);
+
+    const tree = gitExec(pair.work, ['ls-tree', '-r', '--name-only', 'HEAD']).split('\n');
+    assert.ok(tree.indexOf('README.md') >= 0);
+    assert.ok(tree.indexOf('new.txt') >= 0);
+    assert.equal(tree.indexOf('old.md'), -1);
+    assert.ok(tree.every(function (name) { return !/\.admin-auth|^bak\/|^public\//.test(name); }));
+    assert.ok(fs.existsSync(path.join(pair.work, '.admin-auth')));
+
+    // 私有文件仍留在工作区，只是没有被带进提交。
+    const status = gitExec(pair.work, ['status', '--porcelain']).split('\n').filter(Boolean).sort();
+    assert.deepEqual(status, ['?? .admin-auth', '?? bak/', '?? public/']);
+  } finally {
+    await srv.close();
+    cleanup(pair.root);
+  }
+});
+
+test('源码：缺 CSRF 被拒，且不会产生提交', async function () {
+  const pair = makeSourcePair();
+  const srv = await sourceServer(pair);
+  try {
+    const auth = await login(srv.base);
+    fs.writeFileSync(path.join(pair.work, 'new.txt'), 'new\n', 'utf8');
+    const before = gitExec(pair.work, ['rev-list', '--count', 'HEAD']);
+    const res = await call(srv.base, '/admin/api/source/commit', {
+      method: 'POST', cookie: auth.cookie, body: { message: '绕过 CSRF' }
+    });
+    assert.equal(res.status, 403);
+    assert.equal(gitExec(pair.work, ['rev-list', '--count', 'HEAD']), before);
+  } finally {
+    await srv.close();
+    cleanup(pair.root);
+  }
+});
+
+test('源码：推送失败时明确返回已提交未推送', async function () {
+  const pair = makeSourcePair();
+  const srv = await startServer(pair.work, null, {
+    sourceOptions: { repo: path.join(pair.root, 'missing', 'remote.git'), branch: 'source' }
+  });
+  try {
+    const auth = await login(srv.base);
+    fs.writeFileSync(path.join(pair.work, 'new.txt'), 'new\n', 'utf8');
+    const before = Number(gitExec(pair.work, ['rev-list', '--count', 'HEAD']));
+    const res = await call(srv.base, '/admin/api/source/commit', {
+      method: 'POST', cookie: auth.cookie, csrf: auth.csrf,
+      body: { message: '推不上去也要保留本地提交' }
+    });
+    assert.equal(res.status, 502);
+    assert.equal(res.json.committed, true);
+    assert.equal(res.json.pushed, false);
+    assert.match(res.json.error.message, /已提交到本地/);
+    assert.equal(Number(gitExec(pair.work, ['rev-list', '--count', 'HEAD'])), before + 1);
+  } finally {
+    await srv.close();
+    cleanup(pair.root);
+  }
+});
+
+test('源码：历史可分页一直往前翻，空仓库不报错', async function () {
+  const pair = makeSourcePair();
+  const srv = await sourceServer(pair);
+  try {
+    const auth = await login(srv.base);
+    for (let i = 1; i <= 24; i++) {
+      fs.writeFileSync(path.join(pair.work, 'note-' + i + '.txt'), 'n' + i + '\n', 'utf8');
+      gitExec(pair.work, ['add', '--', 'note-' + i + '.txt']);
+      gitExec(pair.work, ['commit', '-q', '-m', '第 ' + i + ' 次更新']);
+    }
+
+    const first = await call(srv.base, '/admin/api/source?limit=10&offset=0', { cookie: auth.cookie });
+    assert.equal(first.status, 200);
+    assert.equal(first.json.commits.length, 10);
+    assert.equal(first.json.hasMore, true);
+    assert.equal(first.json.commits[0].subject, '第 24 次更新');
+    assert.ok(first.json.commits[0].relative);
+    assert.ok(first.json.commits[0].date);
+
+    const second = await call(srv.base, '/admin/api/source?limit=10&offset=10&changes=0', { cookie: auth.cookie });
+    assert.equal(second.json.commits.length, 10);
+    assert.equal(second.json.hasMore, true);
+    assert.equal(second.json.commits[0].subject, '第 14 次更新');
+
+    const third = await call(srv.base, '/admin/api/source?limit=10&offset=20&changes=0', { cookie: auth.cookie });
+    assert.equal(third.json.commits.length, 5);
+    assert.equal(third.json.hasMore, false);
+    assert.equal(third.json.commits[4].subject, 'init');
+
+    const emptyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fomalhaut-empty-'));
+    gitExec(emptyDir, ['init', '-q']);
+    const emptySrv = await sourceServer({ work: emptyDir, bare: pair.bare });
+    try {
+      const emptyAuth = await login(emptySrv.base);
+      const empty = await call(emptySrv.base, '/admin/api/source', { cookie: emptyAuth.cookie });
+      assert.equal(empty.status, 200);
+      assert.deepEqual(empty.json.commits, []);
+      assert.equal(empty.json.hasMore, false);
+    } finally {
+      await emptySrv.close();
+      cleanup(emptyDir);
+    }
+  } finally {
+    await srv.close();
+    cleanup(pair.root);
+  }
+});
+

@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
 <title>站点控制台</title>
-<link rel="stylesheet" href="style.css?v=20261108h">
-<script src="app.js?v=20261108h" defer></script>
+<link rel="stylesheet" href="style.css?v=20261108i">
+<script src="app.js?v=20261108i" defer></script>
 </head>
 <body>
 <div class="grain" aria-hidden="true"></div>
@@ -93,6 +93,10 @@
       <button class="nav-item" data-view="history" type="button">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8v5l3 2"/><path d="M3.1 11a9 9 0 1 1 .6 4"/><path d="M3 4v4h4"/></svg>
         <span>历史</span>
+      </button>
+      <button class="nav-item" data-view="source" type="button">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M8.5 6h4.5a5 5 0 0 1 0 10H8.5"/></svg>
+        <span>源码</span>
       </button>
       <button class="nav-item" data-view="publish" type="button">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg>
@@ -256,6 +260,58 @@
         </div>
         <div id="history-fields" class="history-fields"></div>
         <div id="history-diff" class="history-diff"></div>
+      </div>
+    </section>
+
+    <!-- 源码 -->
+    <section id="view-source" class="view" hidden>
+      <div class="target-card">
+        <div>
+          <p class="eyebrow">Source target</p>
+          <h2 id="source-repo">获取中…</h2>
+          <p id="source-note" class="muted"></p>
+        </div>
+        <span id="source-state" class="badge">读取中</span>
+      </div>
+
+      <div class="publish-grid">
+        <div class="panel">
+          <h3>写一句更新说明</h3>
+          <p class="muted">只提交源码改动，然后推送到上面的分支。不会带上 .admin-auth、部署凭据、bak/ 与 public/。</p>
+          <form id="source-form" class="deploy-form">
+            <label class="field"><span>更新说明（必填，最多 200 字）</span>
+              <input id="source-message" type="text" maxlength="200" autocomplete="off" placeholder="例如：修复首页副标题在窄屏被截断">
+            </label>
+            <p class="hint" id="source-count">0 / 200</p>
+            <button id="btn-source-commit" class="btn btn-primary" type="submit">提交并推送</button>
+            <p class="hint" id="source-hint"></p>
+          </form>
+        </div>
+        <div class="panel">
+          <h3>工作区改动 <span id="source-change-count" class="list-count"></span></h3>
+          <ul id="source-changes" class="source-list"></ul>
+          <div id="source-changes-empty" class="empty small" hidden>
+            <p>工作区没有改动。</p>
+            <span>改完文件再回来提交。</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="source-history-head">
+          <h3>提交历史</h3>
+          <button id="source-more" class="btn" type="button" hidden>查看更多</button>
+        </div>
+        <ul id="source-commits" class="source-list source-commits"></ul>
+        <div id="source-commits-empty" class="empty small" hidden>
+          <p>还没有提交记录。</p>
+          <span>第一次提交之后，这里会一直往前翻到最早一条。</span>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3>执行日志</h3>
+        <pre id="source-log" class="log">还没有执行记录。</pre>
       </div>
     </section>
 
