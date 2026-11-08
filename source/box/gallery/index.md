@@ -10,6 +10,8 @@ comments: false
 
 {% galleryGroup '背景专区' '收藏的一些的背景与壁纸，分辨率很高' '/box/gallery/wallpaper/' https://picsum.photos/id/1016/1200/675 %}
 
+{% galleryGroup '实况照片' '静图 + 短视频的 Live Photo，悬停、长按或点击即可播放' '/box/gallery/live/' https://wenroumao.oss-cn-beijing.aliyuncs.com/live%20photo/IMG_0589.JPEG %}
+
 
 <!-- {% galleryGroup '搜图神器' '放大用户搜图在日常工作图的效率，成为图神必备' http://www.soutushenqi.com/ https://pic.imgdb.cn/item/63312f9316f2c2beb1736dbe.jpg %}
 

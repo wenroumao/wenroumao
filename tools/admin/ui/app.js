@@ -1405,23 +1405,41 @@ async function loadFeatures() {
     const grid = el('div', 'feature-grid');
     group.fields.forEach(function (item) {
       state.features.push(item);
-      const card = el('article', 'feature-card' + (item.value ? ' is-on' : ''));
+      const isEnum = item.type === 'enum';
+      const card = el('article', 'feature-card' + (isEnum ? ' is-enum' : (item.value ? ' is-on' : '')));
       card.dataset.id = item.id;
       const text = el('div', 'feature-text');
       text.appendChild(el('h3', '', item.label));
       if (item.hint) text.appendChild(el('p', '', item.hint));
       text.appendChild(el('em', 'feature-source',
-        item.file + ' › ' + item.path + ' · 当前：' + (item.value ? '开' : '关')));
+        item.file + ' › ' + item.path + ' · 当前：' + featureValueText(item)));
       card.appendChild(text);
 
-      const toggle = el('button', 'toggle');
-      toggle.type = 'button';
-      toggle.dataset.action = 'toggle-feature';
-      toggle.dataset.feature = item.id;
-      toggle.setAttribute('role', 'switch');
-      toggle.setAttribute('aria-checked', item.value ? 'true' : 'false');
-      toggle.setAttribute('aria-label', (item.value ? '关闭 ' : '开启 ') + item.label);
-      card.appendChild(toggle);
+      if (isEnum) {
+        const options = el('div', 'feature-options');
+        options.setAttribute('role', 'group');
+        options.setAttribute('aria-label', item.label);
+        (item.options || []).forEach(function (option) {
+          const active = item.value === option.value;
+          const button = el('button', 'feature-option' + (active ? ' is-active' : ''), option.label);
+          button.type = 'button';
+          button.dataset.action = 'set-feature-value';
+          button.dataset.feature = item.id;
+          button.dataset.value = option.value;
+          button.setAttribute('aria-pressed', active ? 'true' : 'false');
+          options.appendChild(button);
+        });
+        card.appendChild(options);
+      } else {
+        const toggle = el('button', 'toggle');
+        toggle.type = 'button';
+        toggle.dataset.action = 'toggle-feature';
+        toggle.dataset.feature = item.id;
+        toggle.setAttribute('role', 'switch');
+        toggle.setAttribute('aria-checked', item.value ? 'true' : 'false');
+        toggle.setAttribute('aria-label', (item.value ? '关闭 ' : '开启 ') + item.label);
+        card.appendChild(toggle);
+      }
 
       grid.appendChild(card);
     });
@@ -1431,15 +1449,32 @@ async function loadFeatures() {
   if (!state.features.length) box.appendChild(el('p', 'empty', '没有可用的开关。'));
 }
 
+/** 开关当前值的展示文案：布尔说开/关，枚举说选项中文名。 */
+function featureValueText(item) {
+  if (item.type === 'enum') {
+    const option = (item.options || []).find(function (entry) { return entry.value === item.value; });
+    return option ? option.label : String(item.value || '未设置');
+  }
+  return item.value ? '开' : '关';
+}
+
 function paintFeatureCard(button, item) {
   const card = button && button.closest ? button.closest('.feature-card') : null;
   if (!card) return;
-  card.classList.toggle('is-on', !!item.value);
-  button.setAttribute('aria-checked', item.value ? 'true' : 'false');
-  button.setAttribute('aria-label', (item.value ? '关闭 ' : '开启 ') + item.label);
+  if (item.type === 'enum') {
+    card.querySelectorAll('.feature-option').forEach(function (option) {
+      const active = option.dataset.value === item.value;
+      option.classList.toggle('is-active', active);
+      option.setAttribute('aria-pressed', active ? 'true' : 'false');
+    });
+  } else {
+    card.classList.toggle('is-on', !!item.value);
+    button.setAttribute('aria-checked', item.value ? 'true' : 'false');
+    button.setAttribute('aria-label', (item.value ? '关闭 ' : '开启 ') + item.label);
+  }
   const source = card.querySelector('.feature-source');
   if (source) {
-    source.textContent = item.file + ' › ' + item.path + ' · 当前：' + (item.value ? '开' : '关');
+    source.textContent = item.file + ' › ' + item.path + ' · 当前：' + featureValueText(item);
   }
 }
 
@@ -1476,11 +1511,49 @@ async function toggleFeature(id, button) {
   }
 }
 
+/** 枚举型开关：两个互斥选项都要二次确认，确认后才写配置文件。 */
+async function setFeatureValue(id, value, button) {
+  const item = state.features.find(function (entry) { return entry.id === id; });
+  if (!item || item.value === value) return;
+  const option = (item.options || []).find(function (entry) { return entry.value === value; });
+  if (!option) return;
+  const ok = await confirmModal({
+    title: '切换「' + item.label + '」',
+    html: (item.hint ? '<p>' + escapeHtml(item.hint) + '</p>' : '')
+      + '<p class="confirm-path">配置文件：<code>' + escapeHtml(item.file) + '</code><br>'
+      + '字段：<code>' + escapeHtml(item.path) + '</code></p>'
+      + '<p>当前值 <strong>' + escapeHtml(featureValueText(item)) + '</strong>'
+      + ' → <strong>' + escapeHtml(option.label) + '</strong></p>'
+      + '<p class="hint">确认后立即写入配置文件并备份原文件，其它字段与注释保持不变；'
+      + '同时同步前台开关值并自动重新生成，刷新页面即可生效。</p>',
+    confirmText: '确认切换为' + option.label,
+    danger: false
+  });
+  if (!ok) return;
+
+  if (button) button.disabled = true;
+  try {
+    const res = await api('/features', { method: 'POST', body: { id: id, value: value }, csrf: true });
+    item.value = value;
+    paintFeatureCard(button, item);
+    if (res && res.build && res.build.job) {
+      toast('已切换「' + item.label + '」为' + option.label + '，后台正在自动重新生成；刷新前台即可生效', 'ok');
+    } else {
+      addFeaturePending(id);
+      toast('已切换「' + item.label + '」为' + option.label + '；自动生成已关闭，请到「生成与推送」手动生成', 'error');
+    }
+  } catch (err) {
+    toast('保存失败：' + err.message, 'error');
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
 /** 复用现有生成流程：跳到发布页跑一次生成，任务日志在那里完整可见。 */
 async function regenerateFromFeatures() {
   const ok = await confirmModal({
     title: '重新生成站点',
-    text: '会完整生成一次站点，让新开关在生成的页面里生效。生成期间可以先做别的，等它跑完再刷新前台；如果本地预览仍是旧效果，重启 hexo server 即可。',
+    text: '会完整生成一次站点，让新开关在生成的页面里生效。生成期间可以先做别的，等它跑完再刷新前台；本地预览刷新即可，不需要重启 hexo server。',
     confirmText: '开始生成',
     danger: false
   });
@@ -3199,6 +3272,11 @@ function bind() {
 
   // 功能开关
   $('feature-groups').addEventListener('click', function (event) {
+    const valueButton = event.target.closest('[data-action="set-feature-value"]');
+    if (valueButton && !valueButton.disabled) {
+      setFeatureValue(valueButton.dataset.feature, valueButton.dataset.value, valueButton);
+      return;
+    }
     const button = event.target.closest('[data-action="toggle-feature"]');
     if (!button || button.disabled) return;
     toggleFeature(button.dataset.feature, button);

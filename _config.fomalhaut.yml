@@ -868,6 +868,25 @@ ClickShowText:
   random: false
   mobile: false
 
+# ---------------------------------------------------------------- ReactBits 风格动效（首页）
+# 站点独立脚本 + 样式，不改主题源码：source/js/inject/motion-effects.js / source/css/motion-effects.css
+# 构建期由 scripts/motion-inject.js 读取下面四个开关，只有首页会注入；
+# 四项全部关闭时不产生任何额外请求。四项默认全开，均尊重 prefers-reduced-motion。
+# 回滚：把对应 enable 改成 false 即可；整块删除等同于全部开启（脚本内置默认值）。
+motion_effects:
+  # 首屏站点标题逐字进场（每字淡入 + 轻微上浮 + 消模糊）
+  text_reveal:
+    enable: true
+  # 首屏站点标题流光渐变（渐变背景在文字内缓慢平移）
+  gradient_text:
+    enable: true
+  # 首页文章卡片跟随鼠标的聚光高光（仅精确指针设备）
+  card_spotlight:
+    enable: true
+  # 首屏头图区域网格 + 跟随鼠标的柔光（触屏 / 减少动态偏好下退化为静态网格）
+  grid_background:
+    enable: true
+
 # Default display mode (網站默認的顯示模式)
 # light (default) / dark
 display_mode: light
@@ -1108,6 +1127,11 @@ note:
 # other
 # --------------------------------------
 
+# Live Photo（实况照片）
+# 全局播放方式：hover = 悬停播放，press = 长按播放。
+# 页面里所有实况照片统一跟随本项，不再对单张图写死；后台「功能开关」页可切换本项。
+live_photo:
+  play_mode: hover
 # Pjax
 # It may contain bugs and unstable, give feedback when you find the bugs.
 # https://github.com/MoOx/pjax
@@ -1315,6 +1339,14 @@ inject:
     # （配置备份 bak/20261012-archive-cards/before/_config.fomalhaut.yml）。
     - <link rel="stylesheet" href="/css/archive-page.css?v=20261018-scrollfix">
     - <script defer src="/js/inject/archive-page.js?v=20261018-scrollfix"></script>
+    # ── 实况照片画廊（站点独立样式 + 脚本，不改 themes/ 源码）──────────────
+    # 作用页：source/box/gallery/live/index.md（手写 .live-photo-container 样例）。
+    # 脚本零第三方依赖、defer 加载；封面只用 <video poster>，不做 canvas 抽帧（跨域会污染）。
+    # scripts/live-photo-src.js 在构建期把 img.live-photo-still 的真实 src 写回，
+    #   保证 JS 完全不可用时静图仍能显示（其它图片保持主题懒加载行为）。
+    # 改 css/js 记得把下面两个 ?v= 一起提版本。回滚：删掉下面两行即可。
+    - <link rel="stylesheet" href="/css/live-photo.css?v=20261108-livephoto2">
+    - <script defer src="/js/inject/live-photo.js?v=20261108-livephoto6"></script>
 
   bottom:
     - <script defer charset="UTF-8" id="LA_COLLECT" src="https://sdk.51.la/js-sdk-pro.min.js"></script> # 51la统计（+defer 解除阻塞）

@@ -41,7 +41,7 @@ const STATIC_FILES = {
 };
 
 /**
- * 后台可写的全部字段。开关（type: 'boolean' + feature: true）与「功能开关」页
+ * 后台可写的全部字段。开关（type: 'boolean' / 'enum' + feature: true）与「功能开关」页
  * 共用这一份白名单：界面只展示这里列出的 id，接口也只接受这里列出的 id。
  */
 const CONFIG_FIELDS = [
@@ -81,6 +81,10 @@ const CONFIG_FIELDS = [
   { id: 'ClickShowText.enable', file: '_config.fomalhaut.yml', path: ['ClickShowText', 'enable'], label: '点击文字', group: '氛围特效', type: 'boolean', feature: true, hint: '鼠标点击时显示预设文字（文字内容在主题配置里）。' },
   { id: 'lantern.enable', file: '_config.fomalhaut.yml', path: ['lantern', 'enable'], label: '节日灯笼', group: '氛围特效', type: 'boolean', feature: true, hint: '页面两侧挂灯笼，适合节日期间开启。' },
   { id: 'wowjs.enable', file: '_config.fomalhaut.yml', path: ['wowjs', 'enable'], label: '滚动入场动画', group: '氛围特效', type: 'boolean', feature: true, hint: '列表与卡片滚动进入视口时淡入。' },
+  { id: 'motion_effects.text_reveal.enable', file: '_config.fomalhaut.yml', path: ['motion_effects', 'text_reveal', 'enable'], label: '标题逐字进场', group: '氛围特效', type: 'boolean', feature: true, hint: '首页站点标题逐字淡入、轻微上浮；减少动态偏好下自动关闭。' },
+  { id: 'motion_effects.gradient_text.enable', file: '_config.fomalhaut.yml', path: ['motion_effects', 'gradient_text', 'enable'], label: '标题流光渐变', group: '氛围特效', type: 'boolean', feature: true, hint: '首页站点标题的渐变高光缓慢流动；离开视口或页面隐藏时暂停。' },
+  { id: 'motion_effects.card_spotlight.enable', file: '_config.fomalhaut.yml', path: ['motion_effects', 'card_spotlight', 'enable'], label: '卡片鼠标聚光', group: '氛围特效', type: 'boolean', feature: true, hint: '首页文章卡片跟随鼠标显示柔光；触屏与减少动态偏好下自动关闭。' },
+  { id: 'motion_effects.grid_background.enable', file: '_config.fomalhaut.yml', path: ['motion_effects', 'grid_background', 'enable'], label: '首屏网格光晕', group: '氛围特效', type: 'boolean', feature: true, hint: '首页头图叠加淡网格与跟随鼠标的柔光；触屏 / 减少动态下退化为静态网格。' },
 
   /* ------------------------------ 阅读体验 ------------------------------ */
   { id: 'highlight.enable', file: '_config.yml', path: ['highlight', 'enable'], label: '代码高亮', group: '阅读体验', type: 'boolean', feature: true, hint: '关闭后代码块不再着色，复制按钮、语言标签等也可能一起失效。' },
@@ -107,6 +111,7 @@ const CONFIG_FIELDS = [
   { id: 'pangu.enable', file: '_config.fomalhaut.yml', path: ['pangu', 'enable'], label: '中英文空格', group: '交互与评论', type: 'boolean', feature: true, hint: '自动在中英文之间补一个空格。' },
   { id: 'snackbar.enable', file: '_config.fomalhaut.yml', path: ['snackbar', 'enable'], label: '右下角提示条', group: '交互与评论', type: 'boolean', feature: true, hint: '显示站点通知/提示条。' },
   { id: 'envelope_comment.enable', file: '_config.fomalhaut.yml', path: ['envelope_comment', 'enable'], label: '留言板信封', group: '交互与评论', type: 'boolean', feature: true, hint: '留言板使用信封样式的展开动画。' },
+  { id: 'live_photo.play_mode', file: '_config.fomalhaut.yml', path: ['live_photo', 'play_mode'], label: '实况照片播放方式', group: '交互与评论', type: 'enum', feature: true, default: 'hover', options: [{ value: 'hover', label: '悬停播放' }, { value: 'press', label: '长按播放' }], hint: '站内所有实况照片统一使用该触发方式；后台保存后刷新页面即生效，不需要重启服务或重新构建。' },
 
   /* ------------------------------ AI 能力 ------------------------------- */
   { id: 'ai_chat.enable', file: '_config.fomalhaut.yml', path: ['ai_chat', 'enable'], label: 'AI 页面助手', group: 'AI 能力', type: 'boolean', feature: true, hint: '在页面右侧显示 AI 按钮，可总结当前页面并追问（需要配置 API Key）。' },
@@ -388,6 +393,10 @@ function createAdminServer(options) {
       value = found === undefined ? '' : found;
     } catch (e) { /* 文件缺失时显示空值 */ }
     if (field.type === 'boolean') value = value === true || value === 'true';
+    if (field.type === 'enum') {
+      const allowed = (field.options || []).map(function (option) { return option.value; });
+      if (allowed.indexOf(String(value)) < 0) value = field.default || allowed[0] || '';
+    }
     if (field.type === 'list' && !Array.isArray(value)) value = value ? [String(value)] : [];
     if (field.type === 'number' && value === '') value = '';
     return value;
@@ -413,17 +422,23 @@ function createAdminServer(options) {
     return { groups: groups };
   }
 
-  /** 功能开关页：与 CONFIG_FIELDS 共用同一份白名单，按分组返回布尔开关。 */
+  /** 功能开关页：与 CONFIG_FIELDS 共用同一份白名单，按分组返回布尔开关与枚举开关。 */
   function featurePayload() {
     const groups = [];
     const byGroup = {};
     CONFIG_FIELDS.forEach(function (field) {
-      if (!field.feature || field.type !== 'boolean') return;
+      if (!field.feature || (field.type !== 'boolean' && field.type !== 'enum')) return;
       const item = {
-        id: field.id, label: field.label, hint: field.hint || '',
-        value: readFieldValue(field) === true,
+        id: field.id, label: field.label, type: field.type, hint: field.hint || '',
+        value: field.type === 'enum' ? String(readFieldValue(field)) : readFieldValue(field) === true,
         file: field.file, path: field.path.join('.')
       };
+      if (field.type === 'enum') {
+        item.default = field.default || '';
+        item.options = (field.options || []).map(function (option) {
+          return { value: option.value, label: option.label };
+        });
+      }
       if (!byGroup[field.group]) {
         byGroup[field.group] = { name: field.group, fields: [] };
         groups.push(byGroup[field.group]);
@@ -436,15 +451,27 @@ function createAdminServer(options) {
     return { groups: groups, total: groups.reduce(function (n, g) { return n + g.fields.length; }, 0) };
   }
 
-  /** 功能开关页专用：只允许改 feature 白名单里的布尔字段。 */
+  /** 功能开关页专用：只允许改 feature 白名单里的布尔 / 枚举字段。 */
   function saveFeature(body) {
     const id = String((body && body.id) || '');
     const field = CONFIG_FIELDS.find(function (item) {
-      return item.id === id && item.feature && item.type === 'boolean';
+      return item.id === id && item.feature && (item.type === 'boolean' || item.type === 'enum');
     });
     if (!field) throw new Error('没有这个开关。');
-    if (typeof body.value !== 'boolean') throw new Error('开关的值只能是开或关。');
-    saveConfig({ [field.id]: body.value });
+    let value = body && body.value;
+    if (field.type === 'boolean') {
+      if (typeof value !== 'boolean') throw new Error('开关的值只能是开或关。');
+    } else {
+      value = String(value == null ? '' : value);
+      const allowed = (field.options || []).map(function (option) { return option.value; });
+      if (allowed.indexOf(value) < 0) {
+        throw new Error(field.label + ' 只能是：' + (field.options || []).map(function (option) {
+          return option.label;
+        }).join(' / ') + '。');
+      }
+      if (body) body.value = value;
+    }
+    saveConfig({ [field.id]: value });
     return field;
   }
 
@@ -459,6 +486,15 @@ function createAdminServer(options) {
     if (value === '' || value === undefined || value === null) return '（空）';
     if (typeof value === 'boolean') return value ? '开' : '关';
     return String(value);
+  }
+
+  /** 枚举值在修改历史里显示中文标签，其余沿用 displayValue。 */
+  function fieldDisplay(field, value) {
+    if (field && field.type === 'enum') {
+      const option = (field.options || []).find(function (entry) { return entry.value === value; });
+      if (option) return option.label;
+    }
+    return displayValue(value);
   }
 
   function sameValue(a, b) {
@@ -485,6 +521,10 @@ function createAdminServer(options) {
         value.forEach(function (item) {
           if (item.length > 200) throw new Error(field.label + ' 单项不能超过 200 字。');
         });
+      } else if (field.type === 'enum') {
+        value = String(value == null ? '' : value).trim();
+        const allowed = (field.options || []).map(function (option) { return option.value; });
+        if (allowed.indexOf(value) < 0) throw new Error(field.label + ' 的值不在可选范围内。');
       } else {
         value = String(value == null ? '' : value).replace(/[\r\n]+/g, ' ').trim();
         if (value.length > 3000) throw new Error(field.label + ' 超过 3000 字。');
@@ -505,8 +545,8 @@ function createAdminServer(options) {
           fields.push({
             key: item.field.id,
             label: item.field.label,
-            old: displayValue(oldValue === undefined ? '' : oldValue),
-            new: displayValue(item.value)
+            old: fieldDisplay(item.field, oldValue === undefined ? '' : oldValue),
+            new: fieldDisplay(item.field, item.value)
           });
         }
       });
@@ -696,6 +736,13 @@ function createAdminServer(options) {
       return sendJson(res, 200, sessionPayload(req));
     }
 
+    /* 前台实况照片页读取的播放方式：每次请求直接读盘，后台保存后刷新即生效，
+       不依赖构建产物或 hexo server 重启；静态站没有后台时该接口 404，前端回退到构建期 meta。 */
+    if (apiPath === '/live-photo-mode' && isRead) {
+      const field = CONFIG_FIELDS.find(function (item) { return item.id === 'live_photo.play_mode'; });
+      return sendJson(res, 200, { play_mode: field ? String(readFieldValue(field)) : 'hover' });
+    }
+
     if (apiPath === '/login' && method === 'POST') {
       if (!cfg.configured) {
         return fail(res, 503, '还没配置管理员账号：请设置 ADMIN_USER 与 ADMIN_PASSWORD，或用 .admin-auth 文件。');
@@ -876,11 +923,12 @@ function createAdminServer(options) {
       return sendJson(res, 200, featurePayload());
     }
 
-    // 开关只写白名单字段；不在这里自动生成，前端会明确提示“需要重新生成”。
+    // 开关只写白名单字段；枚举开关额外同步运行时 JSON，并自动重新生成静态产物。
     if (apiPath === '/features' && method === 'POST') {
       return readBody(req, 16 * 1024).then(function (body) {
         const field = saveFeature(body);
-        sendJson(res, 200, { ok: true, id: field.id, value: body.value });
+        const build = field.type === 'enum' ? scheduleAutoGenerate() : null;
+        sendJson(res, 200, { ok: true, id: field.id, value: body.value, build: build });
       }).catch(function (err) { fail(res, 400, err.message); });
     }
 
